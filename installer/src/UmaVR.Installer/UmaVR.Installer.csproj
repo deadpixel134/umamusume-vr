@@ -8,7 +8,7 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <NuGetAudit>false</NuGetAudit>
     <AssemblyName>UmaVR.Installer</AssemblyName>
-    <Version>0.1.0</Version>
+    <Version>0.1.1</Version>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\UmaVR.Management\UmaVR.Management.csproj" />

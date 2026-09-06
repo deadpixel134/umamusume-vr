@@ -380,7 +380,7 @@ Remove-Item Env:\UMAVR_OPENXR_LOADER
 $versionedConfig = Join-Path $testRoot "vrmod\config"
 New-Item -ItemType Directory -Path $versionedConfig -Force | Out-Null
 Set-Content -LiteralPath (Join-Path $versionedConfig "settings.json") -Encoding utf8NoBOM -Value `
-    '{"schemaVersion":9,"liveCameraFollow":true,"worldScale":8.0,"eyeRenderScale":0.75,"locomotionEnabled":true,"locomotionSpeed":1.75,"snapTurnEnabled":true,"snapTurnAngleDegrees":45,"navigationHandsSwapped":true,"postProcessingEnabled":true,"blurEnabled":false,"depthOfFieldEnabled":false,"diffusionEnabled":true,"bloomEnabled":true,"globalFogEnabled":true,"lensDistortionEnabled":true,"radialBlurEnabled":false,"sunShaftsEnabled":true,"indirectLightShaftsEnabled":true,"transmittedLightEnabled":true,"dofDiffusionBloomOverlayEnabled":true,"tiltShiftEnabled":false,"fluctuationEnabled":true,"chromaticAberrationEnabled":true,"toneCurveEnabled":true,"exposureEnabled":true,"colorCorrectionEnabled":true,"colorGradingEnabled":true,"bgBlurEnabled":false,"vortexEnabled":true,"filmRollEnabled":true,"hatchingEnabled":true,"letterBoxEnabled":true,"rainSplashEnabled":true}'
+    '{"schemaVersion":10,"liveCameraFollow":true,"worldScale":8.0,"eyeRenderScale":0.75,"locomotionEnabled":true,"locomotionSpeed":12.5,"locomotionScaleCompensationEnabled":true,"snapTurnEnabled":true,"snapTurnAngleDegrees":45,"navigationHandsSwapped":true,"postProcessingEnabled":true,"blurEnabled":false,"depthOfFieldEnabled":false,"diffusionEnabled":true,"bloomEnabled":true,"globalFogEnabled":true,"lensDistortionEnabled":true,"radialBlurEnabled":false,"sunShaftsEnabled":true,"indirectLightShaftsEnabled":true,"transmittedLightEnabled":true,"dofDiffusionBloomOverlayEnabled":true,"tiltShiftEnabled":false,"fluctuationEnabled":true,"chromaticAberrationEnabled":true,"toneCurveEnabled":true,"exposureEnabled":true,"colorCorrectionEnabled":true,"colorGradingEnabled":true,"bgBlurEnabled":false,"vortexEnabled":true,"filmRollEnabled":true,"hatchingEnabled":true,"letterBoxEnabled":true,"rainSplashEnabled":true}'
 $env:UMAVR_PANEL_SELFTEST = "1"
 $env:LOCALAPPDATA = Join-Path $testRoot "run-s-localappdata"; New-Item -ItemType Directory -Path $env:LOCALAPPDATA -Force | Out-Null
 & $fakeGame $ProbeDll
@@ -401,7 +401,10 @@ if ($worldScaleConfig.Count -ne 1 -or $worldScaleConfig[0].status -ne "observed"
 }
 $navigationConfig = @($recordsS | Where-Object { $_.event -eq "navigation_config" })
 if ($navigationConfig.Count -ne 1 -or $navigationConfig[0].locomotion_enabled -ne $true -or
-    [Math]::Abs([double]$navigationConfig[0].locomotion_speed_mps - 1.75) -gt 0.001 -or
+    [Math]::Abs([double]$navigationConfig[0].locomotion_speed_mps - 12.5) -gt 0.001 -or
+    [Math]::Abs([double]$navigationConfig[0].effective_speed_mps - 50.0) -gt 0.001 -or
+    $navigationConfig[0].world_scale_compensation -ne $true -or
+    [Math]::Abs([double]$navigationConfig[0].speed_reference_world_scale - 2.0) -gt 0.001 -or
     $navigationConfig[0].snap_turn_enabled -ne $true -or
     [Math]::Abs([double]$navigationConfig[0].snap_angle_degrees - 45.0) -gt 0.01 -or
     $navigationConfig[0].hands_swapped -ne $true -or
@@ -450,7 +453,8 @@ Write-Host "[info] scenario B records=$($recordsB.Count) copies=$($copies.Count)
 
 # Install/rollback contract on a synthetic game root
 $installRoot = Join-Path $testRoot "install-target"; New-Item -ItemType Directory -Path $installRoot -Force | Out-Null
-Copy-Item -LiteralPath (Join-Path $workspace "config.json") -Destination (Join-Path $installRoot "config.json")
+Set-Content -LiteralPath (Join-Path $installRoot "config.json") -Encoding utf8NoBOM -Value `
+    '{"enableConsole":false,"customData":"preserve-me","_externalDlls":[]}'
 [IO.File]::WriteAllBytes((Join-Path $installRoot "umamusume.exe"), [byte[]](0x4D,0x5A))
 [IO.File]::WriteAllBytes((Join-Path $installRoot "localify.dll"), [byte[]](0x4D,0x5A))
 $before = (Get-FileHash -Algorithm SHA256 (Join-Path $installRoot "config.json")).Hash

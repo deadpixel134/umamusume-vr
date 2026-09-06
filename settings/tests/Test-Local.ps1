@@ -16,9 +16,9 @@ if ($LASTEXITCODE) { throw "configurator localized layout verification failed: $
 $source = Get-Content -LiteralPath (Join-Path $settingsRoot "src\UmaVR.Configurator\MainForm.cs") -Raw
 $uiText = Get-Content -LiteralPath (Join-Path $settingsRoot "src\UmaVR.Configurator\UiText.cs") -Raw
 $buildScript = Get-Content -LiteralPath (Join-Path $settingsRoot "build.ps1") -Raw
-if (-not $buildScript.Contains('candidate_id = "SETTINGS-012"') -or
-    -not $buildScript.Contains('build_id = "SETTINGS-012-$($payloadHash.Substring(0,8))"')) {
-    throw "SETTINGS-012 package identity missing"
+if (-not $buildScript.Contains('candidate_id = "SETTINGS-013"') -or
+    -not $buildScript.Contains('build_id = "SETTINGS-013-$($payloadHash.Substring(0,8))"')) {
+    throw "SETTINGS-013 package identity missing"
 }
 if ($source.Contains('STORY Camera Follow') -or $source.Contains('RACE Camera Follow')) {
     throw "unsupported Camera Follow phantom control found"
@@ -36,6 +36,14 @@ if (-not $uiText.Contains('Primary / Secondary controller 손 역할 전체 바�
     -not $uiText.Contains('왼손 pointer ray·Trigger·X/Y·이동') -or
     -not $uiText.Contains('오른손 panel Grip·Snap Turn')) {
     throw "implemented full controller role-swap control missing"
+}
+if (-not $source.Contains('Number(0.00m, decimal.MaxValue, 0.10m, 2)') -or
+    -not $source.Contains('_locomotionScaleCompensationEnabled') -or
+    -not $source.Contains('LocomotionScaleCompensationEnabled = _locomotionScaleCompensationEnabled.Checked') -or
+    -not $uiText.Contains('월드 스케일에 맞춰 이동 속도 자동 보정') -or
+    -not $uiText.Contains('기본 5.00') -or
+    -not $uiText.Contains('상한 없음')) {
+    throw "SETTINGS-013 unbounded locomotion compensation controls missing"
 }
 if ($source.Contains('Smooth Turn 사용') -or $uiText.Contains('Smooth Turn 사용')) {
     throw "unsupported Smooth Turn phantom control found"

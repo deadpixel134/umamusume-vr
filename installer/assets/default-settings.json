@@ -1,10 +1,11 @@
 {
-  "schemaVersion": 9,
+  "schemaVersion": 10,
   "liveCameraFollow": false,
   "worldScale": 1.0,
   "eyeRenderScale": 1.0,
   "locomotionEnabled": true,
-  "locomotionSpeed": 1.0,
+  "locomotionSpeed": 5.0,
+  "locomotionScaleCompensationEnabled": true,
   "snapTurnEnabled": true,
   "snapTurnAngleDegrees": 30.0,
   "navigationHandsSwapped": false,

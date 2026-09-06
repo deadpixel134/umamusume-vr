@@ -17,7 +17,8 @@ internal static class SettingsSelfTest
                 WorldScale = 8.0f,
                 EyeRenderScale = 0.75f,
                 LocomotionEnabled = false,
-                LocomotionSpeed = 1.75f,
+                LocomotionSpeed = 12.5f,
+                LocomotionScaleCompensationEnabled = true,
                 SnapTurnEnabled = false,
                 SnapTurnAngleDegrees = 45.0f,
                 NavigationHandsSwapped = true,
@@ -58,7 +59,8 @@ internal static class SettingsSelfTest
                 Math.Abs(json.GetProperty("worldScale").GetSingle() - 8.0f) > 0.0001f ||
                 Math.Abs(json.GetProperty("eyeRenderScale").GetSingle() - 0.75f) > 0.0001f ||
                 json.GetProperty("locomotionEnabled").GetBoolean() ||
-                Math.Abs(json.GetProperty("locomotionSpeed").GetSingle() - 1.75f) > 0.0001f ||
+                Math.Abs(json.GetProperty("locomotionSpeed").GetSingle() - 12.5f) > 0.0001f ||
+                !json.GetProperty("locomotionScaleCompensationEnabled").GetBoolean() ||
                 json.GetProperty("snapTurnEnabled").GetBoolean() ||
                 Math.Abs(json.GetProperty("snapTurnAngleDegrees").GetSingle() - 45.0f) > 0.0001f ||
                 !json.GetProperty("navigationHandsSwapped").GetBoolean() ||
@@ -83,7 +85,8 @@ internal static class SettingsSelfTest
                 Math.Abs(roundTrip.Settings.WorldScale - 8.0f) > 0.0001f ||
                 Math.Abs(roundTrip.Settings.EyeRenderScale - 0.75f) > 0.0001f ||
                 roundTrip.Settings.LocomotionEnabled ||
-                Math.Abs(roundTrip.Settings.LocomotionSpeed - 1.75f) > 0.0001f ||
+                Math.Abs(roundTrip.Settings.LocomotionSpeed - 12.5f) > 0.0001f ||
+                !roundTrip.Settings.LocomotionScaleCompensationEnabled ||
                 roundTrip.Settings.SnapTurnEnabled ||
                 Math.Abs(roundTrip.Settings.SnapTurnAngleDegrees - 45.0f) > 0.0001f ||
                 !roundTrip.Settings.NavigationHandsSwapped ||
@@ -98,7 +101,7 @@ internal static class SettingsSelfTest
 
             File.WriteAllText(path,
                 "{\"schemaVersion\":8,\"liveCameraFollow\":true,\"worldScale\":8,\"eyeRenderScale\":9," +
-                "\"locomotionEnabled\":true,\"locomotionSpeed\":99," +
+                "\"locomotionEnabled\":true,\"locomotionSpeed\":-1," +
                 "\"snapTurnEnabled\":true,\"snapTurnAngleDegrees\":5," +
                 "\"navigationHandsSwapped\":true,\"postProcessingEnabled\":false,\"blurEnabled\":false," +
                 "\"depthOfFieldEnabled\":false,\"diffusionEnabled\":false," +
@@ -137,7 +140,8 @@ internal static class SettingsSelfTest
             if (migrated.UsedFallback || migrated.Settings.SchemaVersion != VrSettings.CurrentSchemaVersion ||
                 Math.Abs(migrated.Settings.WorldScale - VrSettings.DefaultWorldScale) > 0.0001f ||
                 !migrated.Settings.LocomotionEnabled ||
-                Math.Abs(migrated.Settings.LocomotionSpeed - VrSettings.DefaultLocomotionSpeed) > 0.0001f ||
+                Math.Abs(migrated.Settings.LocomotionSpeed - VrSettings.LegacyDefaultLocomotionSpeed) > 0.0001f ||
+                migrated.Settings.LocomotionScaleCompensationEnabled ||
                 !migrated.Settings.SnapTurnEnabled ||
                 Math.Abs(migrated.Settings.SnapTurnAngleDegrees - VrSettings.DefaultSnapTurnAngleDegrees) > 0.0001f ||
                 migrated.Settings.NavigationHandsSwapped || !migrated.Settings.PostProcessingEnabled ||
@@ -243,9 +247,23 @@ internal static class SettingsSelfTest
             if (migratedV7.UsedFallback ||
                 migratedV7.Settings.SchemaVersion != VrSettings.CurrentSchemaVersion ||
                 Math.Abs(migratedV7.Settings.WorldScale - 2.0f) > 0.0001f ||
+                migratedV7.Settings.LocomotionScaleCompensationEnabled ||
                 !SelectiveEffectsEnabled(migratedV7.Settings))
             {
                 throw new InvalidOperationException("schema v7 migration mismatch");
+            }
+
+            File.WriteAllText(path,
+                "{\"schemaVersion\":9,\"worldScale\":4,\"eyeRenderScale\":1," +
+                "\"locomotionEnabled\":true,\"locomotionSpeed\":12.5," +
+                "\"snapTurnEnabled\":true,\"snapTurnAngleDegrees\":30}");
+            VrSettingsValidation migratedV9 = SettingsStore.LoadFromGameRoot(root);
+            if (migratedV9.UsedFallback ||
+                migratedV9.Settings.SchemaVersion != VrSettings.CurrentSchemaVersion ||
+                Math.Abs(migratedV9.Settings.LocomotionSpeed - 12.5f) > 0.0001f ||
+                migratedV9.Settings.LocomotionScaleCompensationEnabled)
+            {
+                throw new InvalidOperationException("schema v9 unbounded direct-speed migration mismatch");
             }
 
             SettingsStore.SaveToGameRoot(root, requested);

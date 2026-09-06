@@ -26,7 +26,8 @@
 #define AUX_PANEL_FORWARD_OFFSET_M 0.32f
 #define CURSOR_HALF_SIZE_FRACTION 0.018f
 #define CURSOR_SURFACE_OFFSET_M 0.003f
-#define NAV_LOCOMOTION_SPEED_DEFAULT_MPS 1.0f
+#define NAV_LOCOMOTION_SPEED_DEFAULT_MPS 5.0f
+#define NAV_LOCOMOTION_SCALE_REFERENCE 2.0f
 #define NAV_STICK_DEADZONE 0.25f
 #define NAV_SNAP_THRESHOLD 0.75f
 #define NAV_SNAP_RELEASE 0.45f
@@ -257,6 +258,7 @@ static float world_scale = WORLD_SCALE_DEFAULT;
 static BOOL world_scale_setting_loaded;
 static BOOL nav_locomotion_enabled = TRUE;
 static float nav_locomotion_speed_mps = NAV_LOCOMOTION_SPEED_DEFAULT_MPS;
+static BOOL nav_locomotion_scale_compensation_enabled = TRUE;
 static BOOL nav_snap_turn_enabled = TRUE;
 static float nav_snap_angle_rad = NAV_SNAP_ANGLE_DEFAULT_RAD;
 /* Persisted as navigationHandsSwapped for schema-v3 compatibility, but the
@@ -490,6 +492,17 @@ static BOOL commit_immersive_environment_origin(EyeOptics* optics) {
 
 enum { NAV_STEP_MOVED = 1, NAV_STEP_SNAPPED = 2 };
 
+static float effective_navigation_speed_mps(float configured_speed,
+        float perceived_world_scale, BOOL compensate_for_world_scale) {
+    if (!isfinite(configured_speed) || configured_speed < 0.0f) return 0.0f;
+    if (!compensate_for_world_scale) return configured_speed;
+    if (!isfinite(perceived_world_scale) || perceived_world_scale < WORLD_SCALE_MIN)
+        return configured_speed;
+    float compensated = configured_speed *
+        (perceived_world_scale / NAV_LOCOMOTION_SCALE_REFERENCE);
+    return isfinite(compensated) && compensated >= 0.0f ? compensated : configured_speed;
+}
+
 static XrVector2f navigation_apply_deadzone(XrVector2f input) {
     float magnitude = sqrtf(input.x * input.x + input.y * input.y);
     if (!isfinite(magnitude) || magnitude <= NAV_STICK_DEADZONE)
@@ -538,7 +551,9 @@ static uint32_t apply_navigation_input(EyeOptics* optics, XrVector2f move,
             optics->navigation_base_yaw + optics->artificial_yaw + physical_yaw,
             relative_pitch, 0.0f);
         Vec3 direction = quat_rotate(roll_free_view, (Vec3){move.x, 0.0f, move.y});
-        float distance = nav_locomotion_speed_mps * dt_seconds;
+        float effective_speed = effective_navigation_speed_mps(nav_locomotion_speed_mps,
+            world_scale, nav_locomotion_scale_compensation_enabled);
+        float distance = effective_speed * dt_seconds;
         Vec3 previous = optics->artificial_position;
         optics->artificial_position.x += direction.x * distance;
         optics->artificial_position.y += direction.y * distance;
@@ -3345,12 +3360,16 @@ static void update_controller_navigation(XrTime display_time,
     ReleaseSRWLockExclusive(&eye_optics_lock);
     if ((changed & NAV_STEP_MOVED) && !g_navigation_move_logged) {
         g_navigation_move_logged = TRUE;
-        char detail[256];
+        char detail[384];
+        float effective_speed = effective_navigation_speed_mps(nav_locomotion_speed_mps,
+            world_scale, nav_locomotion_scale_compensation_enabled);
         snprintf(detail, sizeof(detail),
             "\"status\":\"observed\",\"hand\":\"%s\"," 
-            "\"basis\":\"final_view_roll_free\",\"speed_mps\":%.3f",
+            "\"basis\":\"final_view_roll_free\",\"configured_speed_mps\":%.3f,"
+            "\"effective_speed_mps\":%.3f,\"world_scale_compensation\":%s",
             controller_hands_swapped ? "left" : "right",
-            nav_locomotion_speed_mps);
+            nav_locomotion_speed_mps, effective_speed,
+            nav_locomotion_scale_compensation_enabled ? "true" : "false");
         write_record("CTRL-006", "controller_locomotion_applied", detail);
     }
     if ((changed & NAV_STEP_SNAPPED) && !g_navigation_turn_logged) {
@@ -4563,17 +4582,25 @@ static DWORD WINAPI selftest_worker(LPVOID unused) {
     uint32_t held_changed = apply_navigation_input(&navigation_test,
         (XrVector2f){0.0f, 0.0f}, (XrVector2f){1.0f, 0.0f}, 0.0f,
         &navigation_x_latched, &navigation_y_latched);
-    BOOL navigation_math_ok = artificial_pose_ok &&
+    float effective_test_speed = effective_navigation_speed_mps(nav_locomotion_speed_mps,
+        world_scale, nav_locomotion_scale_compensation_enabled);
+    BOOL locomotion_scale_compensation_math_ok =
+        fabsf(effective_navigation_speed_mps(5.0f, 2.0f, TRUE) - 5.0f) < 0.001f &&
+        fabsf(effective_navigation_speed_mps(5.0f, 4.0f, TRUE) - 10.0f) < 0.001f &&
+        fabsf(effective_navigation_speed_mps(7.5f, 8.0f, FALSE) - 7.5f) < 0.001f &&
+        fabsf(effective_navigation_speed_mps(12.5f, 8.0f, TRUE) - 50.0f) < 0.001f &&
+        effective_navigation_speed_mps(-1.0f, 2.0f, TRUE) == 0.0f;
+    BOOL navigation_math_ok = artificial_pose_ok && locomotion_scale_compensation_math_ok &&
         (navigation_changed & NAV_STEP_MOVED) != 0 &&
         (navigation_changed & NAV_STEP_SNAPPED) != 0 &&
         held_changed == 0 && navigation_x_latched && !navigation_y_latched &&
         fabsf(snapped_yaw - nav_snap_angle_rad) < 0.001f &&
         fabsf(navigation_test.artificial_yaw - snapped_yaw) < 0.001f &&
         fabsf(navigation_test.artificial_position.x -
-            sinf(nav_snap_angle_rad) * nav_locomotion_speed_mps * 0.1f) < 0.001f &&
+            sinf(nav_snap_angle_rad) * effective_test_speed * 0.1f) < 0.001f &&
         fabsf(navigation_test.artificial_position.y) < 0.001f &&
         fabsf(navigation_test.artificial_position.z -
-            cosf(nav_snap_angle_rad) * nav_locomotion_speed_mps * 0.1f) < 0.001f;
+            cosf(nav_snap_angle_rad) * effective_test_speed * 0.1f) < 0.001f;
     pose_test.origin_center.orientation = (XrQuaternionf){0, 0, 0, 1};
     pose_test.current_center.orientation = (XrQuaternionf){0, 0, sin15, cos15};
     pose_test.artificial_yaw = 0.0f;
@@ -4787,9 +4814,11 @@ static BOOL apply_runtime_settings_text(const char* text, BOOL versioned_setting
                   fabsf(schema_version - 6.0f) > 0.0001f &&
                   fabsf(schema_version - 7.0f) > 0.0001f &&
                   fabsf(schema_version - 8.0f) > 0.0001f &&
-                  fabsf(schema_version - 9.0f) > 0.0001f)) {
+                  fabsf(schema_version - 9.0f) > 0.0001f &&
+                  fabsf(schema_version - 10.0f) > 0.0001f)) {
             return FALSE;
         }
+        if (schema_version < 10.0f) nav_locomotion_scale_compensation_enabled = FALSE;
     }
 
     BOOL loaded = FALSE;
@@ -4820,9 +4849,12 @@ static BOOL apply_runtime_settings_text(const char* text, BOOL versioned_setting
             loaded = TRUE;
         }
         float speed = NAV_LOCOMOTION_SPEED_DEFAULT_MPS;
-        if (parse_json_float_setting(text, "locomotionSpeed", &speed) &&
-                speed >= 0.1f && speed <= 5.0f) {
+        if (parse_json_float_setting(text, "locomotionSpeed", &speed) && speed >= 0.0f) {
             nav_locomotion_speed_mps = speed;
+            loaded = TRUE;
+        }
+        if (parse_json_bool_setting(text, "locomotionScaleCompensationEnabled", &value)) {
+            nav_locomotion_scale_compensation_enabled = value;
             loaded = TRUE;
         }
         if (parse_json_bool_setting(text, "snapTurnEnabled", &value)) {
@@ -4960,13 +4992,20 @@ static DWORD WINAPI shader_init_worker(LPVOID unused) {
         write_record("POSE-003", "world_scale_config", detail);
     }
     {
-        char detail[512];
+        char detail[640];
+        float effective_speed = effective_navigation_speed_mps(nav_locomotion_speed_mps,
+            world_scale, nav_locomotion_scale_compensation_enabled);
         snprintf(detail, sizeof(detail),
             "\"status\":\"observed\",\"locomotion_enabled\":%s," 
-            "\"locomotion_speed_mps\":%.3f,\"snap_turn_enabled\":%s," 
+            "\"locomotion_speed_mps\":%.3f,\"effective_speed_mps\":%.3f,"
+            "\"world_scale_compensation\":%s,\"speed_reference_world_scale\":%.2f,"
+            "\"snap_turn_enabled\":%s,"
             "\"snap_angle_degrees\":%.1f,\"locomotion_hand\":\"%s\"," 
             "\"view_turn_hand\":\"%s\",\"hands_swapped\":%s",
             nav_locomotion_enabled ? "true" : "false", nav_locomotion_speed_mps,
+            effective_speed,
+            nav_locomotion_scale_compensation_enabled ? "true" : "false",
+            NAV_LOCOMOTION_SCALE_REFERENCE,
             nav_snap_turn_enabled ? "true" : "false", nav_snap_angle_rad * 57.2957795f,
             controller_hands_swapped ? "left" : "right",
             controller_hands_swapped ? "right" : "left",

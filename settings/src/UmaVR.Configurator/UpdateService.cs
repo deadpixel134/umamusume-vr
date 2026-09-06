@@ -19,7 +19,7 @@ internal sealed class UpdateService : IDisposable
 
     public UpdateService()
     {
-        _http.DefaultRequestHeaders.UserAgent.ParseAdd("UmaVR-Configurator/0.1.0");
+        _http.DefaultRequestHeaders.UserAgent.ParseAdd("UmaVR-Configurator/0.1.1");
         _http.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
     }
 

@@ -38,7 +38,9 @@ internal sealed class MainForm : Form
     private readonly CheckBox _letterBoxEnabled = TaggedCheckBox("LetterBoxEnabled");
     private readonly CheckBox _rainSplashEnabled = TaggedCheckBox("RainSplashEnabled");
     private readonly CheckBox _locomotionEnabled = TaggedCheckBox("LocomotionEnabled");
-    private readonly NumericUpDown _locomotionSpeed = Number(0.10m, 5.00m, 0.10m, 2);
+    private readonly NumericUpDown _locomotionSpeed = Number(0.00m, decimal.MaxValue, 0.10m, 2);
+    private readonly CheckBox _locomotionScaleCompensationEnabled =
+        TaggedCheckBox("LocomotionScaleCompensationEnabled");
     private readonly CheckBox _snapTurnEnabled = TaggedCheckBox("SnapTurnEnabled");
     private readonly NumericUpDown _snapTurnAngle = Number(15m, 90m, 5m, 0);
     private readonly CheckBox _navigationHandsSwapped = TaggedCheckBox("HandSwapEnabled");
@@ -216,6 +218,7 @@ internal sealed class MainForm : Form
         TableLayoutPanel grid = Grid();
         AddRow(grid, "Locomotion", _locomotionEnabled);
         AddRow(grid, "LocomotionSpeed", _locomotionSpeed);
+        AddRow(grid, "LocomotionScaleCompensation", _locomotionScaleCompensationEnabled);
         AddRow(grid, "SnapTurn", _snapTurnEnabled);
         AddRow(grid, "SnapAngle", _snapTurnAngle);
         AddRow(grid, "HandSwap", _navigationHandsSwapped);
@@ -469,6 +472,7 @@ internal sealed class MainForm : Form
         EyeRenderScale = (float)_eyeRenderScale.Value,
         LocomotionEnabled = _locomotionEnabled.Checked,
         LocomotionSpeed = (float)_locomotionSpeed.Value,
+        LocomotionScaleCompensationEnabled = _locomotionScaleCompensationEnabled.Checked,
         SnapTurnEnabled = _snapTurnEnabled.Checked,
         SnapTurnAngleDegrees = (float)_snapTurnAngle.Value,
         NavigationHandsSwapped = _navigationHandsSwapped.Checked,
@@ -509,6 +513,7 @@ internal sealed class MainForm : Form
         _locomotionEnabled.Checked = settings.LocomotionEnabled;
         _locomotionSpeed.Value = Math.Clamp((decimal)settings.LocomotionSpeed,
             _locomotionSpeed.Minimum, _locomotionSpeed.Maximum);
+        _locomotionScaleCompensationEnabled.Checked = settings.LocomotionScaleCompensationEnabled;
         _snapTurnEnabled.Checked = settings.SnapTurnEnabled;
         _snapTurnAngle.Value = Math.Clamp((decimal)settings.SnapTurnAngleDegrees,
             _snapTurnAngle.Minimum, _snapTurnAngle.Maximum);

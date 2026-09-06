@@ -2,16 +2,15 @@ namespace UmaVR.Configurator;
 
 internal sealed class VrSettings
 {
-    public const int CurrentSchemaVersion = 9;
+    public const int CurrentSchemaVersion = 10;
     public const float DefaultEyeRenderScale = 1.0f;
     public const float MinimumEyeRenderScale = 0.50f;
     public const float MaximumEyeRenderScale = 1.50f;
     public const float ExpensiveEyeRenderScale = 1.25f;
     public const float DefaultWorldScale = 1.0f;
     public const float MinimumWorldScale = 0.55f;
-    public const float DefaultLocomotionSpeed = 1.0f;
-    public const float MinimumLocomotionSpeed = 0.10f;
-    public const float MaximumLocomotionSpeed = 5.0f;
+    public const float DefaultLocomotionSpeed = 5.0f;
+    public const float LegacyDefaultLocomotionSpeed = 1.0f;
     public const float DefaultSnapTurnAngleDegrees = 30.0f;
     public const float MinimumSnapTurnAngleDegrees = 15.0f;
     public const float MaximumSnapTurnAngleDegrees = 90.0f;
@@ -27,6 +26,8 @@ internal sealed class VrSettings
     public bool LocomotionEnabled { get; set; } = true;
 
     public float LocomotionSpeed { get; set; } = DefaultLocomotionSpeed;
+
+    public bool LocomotionScaleCompensationEnabled { get; set; } = true;
 
     public bool SnapTurnEnabled { get; set; } = true;
 
@@ -87,16 +88,15 @@ internal static class VrSettingsValidator
             return new(VrSettings.CreateDefaults(), issues);
         }
 
-        if (source.SchemaVersion is not 1 and not 2 and not 3 and not 4 and not 5 and not 6 and not 7 and not 8 and not VrSettings.CurrentSchemaVersion)
+        if (source.SchemaVersion is not 1 and not 2 and not 3 and not 4 and not 5 and not 6 and not 7 and not 8 and not 9 and not VrSettings.CurrentSchemaVersion)
         {
             issues.Add($"schemaVersion:unsupported:{source.SchemaVersion}");
             return new(VrSettings.CreateDefaults(), issues);
         }
 
-        float locomotionSpeed = source.LocomotionSpeed;
-        if (!float.IsFinite(locomotionSpeed) ||
-            locomotionSpeed < VrSettings.MinimumLocomotionSpeed ||
-            locomotionSpeed > VrSettings.MaximumLocomotionSpeed)
+        float locomotionSpeed = source.SchemaVersion < 2 ?
+            VrSettings.LegacyDefaultLocomotionSpeed : source.LocomotionSpeed;
+        if (!float.IsFinite(locomotionSpeed) || locomotionSpeed < 0.0f)
         {
             issues.Add("locomotionSpeed:out-of-range");
             locomotionSpeed = VrSettings.DefaultLocomotionSpeed;
@@ -137,6 +137,8 @@ internal static class VrSettingsValidator
                 EyeRenderScale = eyeScale,
                 LocomotionEnabled = source.LocomotionEnabled,
                 LocomotionSpeed = locomotionSpeed,
+                LocomotionScaleCompensationEnabled =
+                    source.SchemaVersion >= 10 && source.LocomotionScaleCompensationEnabled,
                 SnapTurnEnabled = source.SnapTurnEnabled,
                 SnapTurnAngleDegrees = snapAngle,
                 NavigationHandsSwapped = source.NavigationHandsSwapped,
