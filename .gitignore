@@ -1,0 +1,52 @@
+# Deny by default: this repository lives inside a real game installation.
+*
+
+# Public/product-owned repository files.
+!/.gitignore
+!/README.md
+!/README.en.md
+!/README.ja.md
+!/LICENSE
+!/CREDITS.md
+!/docs/
+!/docs/**
+
+# Runtime source and reproducible local validation.
+!/immersive/
+!/immersive/build.ps1
+!/immersive/README.md
+!/immersive/src/
+!/immersive/src/**
+!/immersive/tests/
+!/immersive/tests/**
+
+# Settings source and validation.
+!/settings/
+!/settings/build.ps1
+!/settings/README.md
+!/settings/src/
+!/settings/src/**
+!/settings/tests/
+!/settings/tests/**
+
+# Installer, package builder, update policy and tests.
+!/installer/
+!/installer/Build-Package.ps1
+!/installer/assets/
+!/installer/assets/**
+!/installer/src/
+!/installer/src/**
+
+# Never publish generated outputs, runtime payloads, symbols, logs or user state.
+**/bin/
+**/obj/
+**/build/
+**/package/
+**/*.pdb
+**/*.log
+**/*.dmp
+**/*.zip
+**/*.sha256
+**/settings.json
+**/settings.json.bak
+**/rollback/
