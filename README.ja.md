@@ -32,8 +32,8 @@ Virtual DesktopのVDXR経路で実機検証済みです。現在の公式バー�
 - Home、Story、Race、Training、キャラクタープレビューは安全なステレオ所有経路がないためPANEL表示です。
 - SteamVR OpenXRとMeta Quest Link/Air Linkは暫定対応で、本プロジェクトでは未検証です。
 
-現在のリリースは互換性のある既存`localify.dll`と`config.json`の`externalDlls`ローダーを必要とします。公開GitHub Releaseには認証なしでアクセスし、再利用可能なGitHub認証情報は配布しません。
+現在のリリースは互換性のある既存`localify.dll`と`config.json`の`externalDlls`ローダーを必要とします。検出されない場合は、インストーラーに表示される[公式Localifyインストール案内](https://github.com/Kimjio/umamusume-localify)を先に確認してください。公開GitHub Releaseには認証なしでアクセスし、再利用可能なGitHub認証情報は配布しません。
 
-ゲーム原本、Localifyファイル、ユーザー設定、ログ、ロールバックデータ、ビルド成果物、認証情報はリポジトリに含めません。ソースは[MIT License](LICENSE)で提供します。
+ゲーム原本、Localifyファイル、ユーザー設定、ログ、ロールバックデータ、ビルド成果物、認証情報はリポジトリに含めません。ソースは[MIT License](LICENSE)で提供し、配布バイナリに組み込まれた外部コンポーネントには[Third-Party Notices](THIRD_PARTY_NOTICES.txt)とパッケージ内の.NET通知が適用されます。
 
 > UmaVRは非公式ファンプロジェクトであり、ゲーム開発・配信会社とは関係ありません。正規にインストールしたゲームが必要です。

@@ -65,8 +65,19 @@ Get-ChildItem -LiteralPath $configPublish -File | Where-Object Extension -ne '.p
     Copy-Item -Destination $toolsDestination
 Get-ChildItem -LiteralPath $installerPublish -File | Where-Object Extension -ne '.pdb' |
     Copy-Item -Destination $packageRoot
-Copy-Item -LiteralPath (Join-Path $vrmodRoot 'LICENSE') `
-    -Destination (Join-Path $payload 'vrmod\LICENSE.txt')
+$noticeFiles = [ordered]@{
+    'LICENSE.txt' = Join-Path $vrmodRoot 'LICENSE'
+    'THIRD_PARTY_NOTICES.txt' = Join-Path $vrmodRoot 'THIRD_PARTY_NOTICES.txt'
+    'DOTNET_LICENSE.txt' = Join-Path $PSScriptRoot 'assets\dotnet\LICENSE.txt'
+    'DOTNET_THIRD_PARTY_NOTICES.txt' = Join-Path $PSScriptRoot 'assets\dotnet\ThirdPartyNotices.txt'
+}
+foreach ($entry in $noticeFiles.GetEnumerator()) {
+    if (-not (Test-Path -LiteralPath $entry.Value -PathType Leaf)) {
+        throw "Required license notice is missing: $($entry.Value)"
+    }
+    Copy-Item -LiteralPath $entry.Value -Destination (Join-Path $packageRoot $entry.Key)
+    Copy-Item -LiteralPath $entry.Value -Destination (Join-Path $payload "vrmod\$($entry.Key)")
+}
 
 $files = foreach ($file in Get-ChildItem -LiteralPath $payload -Recurse -File | Sort-Object FullName) {
     $relative = [IO.Path]::GetRelativePath($payload, $file.FullName).Replace('\','/')

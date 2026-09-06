@@ -8,7 +8,7 @@
 
 - Windows 11 x64と正規のDMM版ウマ娘
 - PC OpenXR環境
-- 現在の候補ではLocalify 1.50.0の`localify.dll`と有効なルート`config.json`
+- 現在のリリースではLocalify 1.50.0の`localify.dll`と有効なルート`config.json`。未導入の場合は[公式Localifyインストール案内](https://github.com/Kimjio/umamusume-localify)を先に確認してください。
 
 ## インストール
 
@@ -16,9 +16,11 @@
 2. 安定版Releaseが提供されたら`UmaVR-vX.Y.Z.zip`と同じReleaseの`.sha256`を取得します。
 3. ゲームフォルダー外へ展開し、`UmaVR.Installer.exe`を起動します。
 4. `umamusume.exe`、`GameAssembly.dll`、`UnityPlayer.dll`があるフォルダーを選択してインストールします。
-5. `vrmod/tools/UmaVR.Configurator.exe`で設定を確認し、DMMからゲームを起動します。
+5. Localifyが未導入または不完全な場合は、インストーラーの**公式Localifyインストール案内を開く**から導入し、状態を更新します。
+6. UmaVRをインストールし、`vrmod/tools/UmaVR.Configurator.exe`で設定を確認してDMMからゲームを起動します。
 
 インストーラーは全payload hashを先に検証し、既存設定と他の`externalDlls`を維持してUmaVRを追加します。
+UmaVRはLocalifyを自動でダウンロード、導入、置換しません。
 
 ## 自動更新
 

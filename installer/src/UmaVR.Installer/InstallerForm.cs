@@ -11,6 +11,13 @@ internal sealed class InstallerForm : Form
     private readonly Label _packageVersion = ValueLabel();
     private readonly Label _installedVersion = ValueLabel();
     private readonly Label _localifyStatus = ValueLabel();
+    private readonly LinkLabel _localifyGuide = new()
+    {
+        AutoSize = true,
+        Anchor = AnchorStyles.Left,
+        Tag = "LocalifyInstallGuide"
+    };
+    private readonly Label _localifyGuideCaption;
     private readonly ProgressBar _progress = new() { Dock = DockStyle.Fill, Minimum = 0, Maximum = 100 };
     private readonly Label _status = new() { Dock = DockStyle.Fill, AutoSize = true };
     private readonly TextBox _log = new()
@@ -129,6 +136,8 @@ internal sealed class InstallerForm : Form
         AddInfo(informationGrid, "PackageVersion", _packageVersion);
         AddInfo(informationGrid, "InstalledVersion", _installedVersion);
         AddInfo(informationGrid, "LocalifyStatus", _localifyStatus);
+        _localifyGuideCaption = AddInfo(informationGrid, "LocalifyInstall", _localifyGuide);
+        _localifyGuide.LinkClicked += OpenLocalifyGuide;
         information.Controls.Add(informationGrid);
         root.Controls.Add(information, 0, 3);
 
@@ -227,6 +236,10 @@ internal sealed class InstallerForm : Form
         _localifyStatus.Text = status is { IsGameRoot: true }
             ? InstallerText.Localify(status.Localify)
             : InstallerText.Get("InvalidGameRoot");
+        bool showLocalifyGuide = status is { IsGameRoot: true } &&
+            InstallerText.NeedsLocalifyGuide(status.Localify);
+        _localifyGuideCaption.Visible = showLocalifyGuide;
+        _localifyGuide.Visible = showLocalifyGuide;
         UpdateButtons();
     }
 
@@ -390,6 +403,21 @@ internal sealed class InstallerForm : Form
         }
     }
 
+    private void OpenLocalifyGuide(object? sender, LinkLabelLinkClickedEventArgs args)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(InstallerText.LocalifyRepository)
+            {
+                UseShellExecute = true
+            });
+        }
+        catch (Exception exception)
+        {
+            SetStatusText(InstallerText.Format("OpenLinkFailed", exception.Message));
+        }
+    }
+
     private void SetStatus(string key) => SetStatusText(InstallerText.Get(key));
 
     private void SetStatusText(string value) => _status.Text = value;
@@ -406,19 +434,21 @@ internal sealed class InstallerForm : Form
         return button;
     }
 
-    private static void AddInfo(TableLayoutPanel grid, string key, Label value)
+    private static Label AddInfo(TableLayoutPanel grid, string key, Label value)
     {
         int row = grid.RowCount++;
         grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        grid.Controls.Add(new Label
+        Label caption = new()
         {
             Tag = key,
             AutoSize = true,
             Anchor = AnchorStyles.Left,
             Margin = new Padding(0, 5, 12, 5)
-        }, 0, row);
+        };
+        grid.Controls.Add(caption, 0, row);
         value.Margin = new Padding(0, 5, 0, 5);
         grid.Controls.Add(value, 1, row);
+        return caption;
     }
 
     private static Label ValueLabel() => new()

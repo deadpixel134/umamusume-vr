@@ -15,11 +15,25 @@ internal static class InstallerSelfTest
         "vrmod/tools/UmaVR.Configurator.deps.json",
         "vrmod/tools/UmaVR.Configurator.runtimeconfig.json",
         "vrmod/tools/UmaVR.Management.dll",
-        "vrmod/LICENSE.txt"
+        "vrmod/LICENSE.txt",
+        "vrmod/THIRD_PARTY_NOTICES.txt",
+        "vrmod/DOTNET_LICENSE.txt",
+        "vrmod/DOTNET_THIRD_PARTY_NOTICES.txt"
     };
 
     public static void Run()
     {
+        Assert(Uri.TryCreate(InstallerText.LocalifyRepository, UriKind.Absolute, out Uri? localify) &&
+            localify.Scheme == Uri.UriSchemeHttps &&
+            string.Equals(localify.Host, "github.com", StringComparison.OrdinalIgnoreCase) &&
+            localify.AbsolutePath == "/Kimjio/umamusume-localify",
+            "official Localify installation URL");
+        Assert(!InstallerText.NeedsLocalifyGuide(LocalifyStatus.Installed),
+            "installed Localify hides guidance");
+        Assert(InstallerText.NeedsLocalifyGuide(LocalifyStatus.Partial),
+            "partial Localify shows guidance");
+        Assert(InstallerText.NeedsLocalifyGuide(LocalifyStatus.Absent),
+            "absent Localify shows guidance");
         Assert(ReleaseUpdatePolicy.IsNewer("0.1.0", "v0.1.1"), "version comparison");
         Assert(!ReleaseUpdatePolicy.IsNewer("0.1.0", "v0.1.0"), "equal version comparison");
         Assert(ReleaseUpdatePolicy.ParseSha256(

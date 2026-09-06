@@ -38,10 +38,10 @@ Virtual Desktop의 VDXR 경로로 실기 검증했습니다. 현재 공식 버�
 
 ## 주의 사항
 
-- 현재 릴리스 후보는 기존 `localify.dll`과 `config.json`의 `externalDlls` 로더를 사용합니다. clean-game standalone loader는 아직 완료되지 않았습니다.
+- 현재 릴리스는 기존 `localify.dll`과 `config.json`의 `externalDlls` 로더를 사용합니다. 감지되지 않으면 설치 프로그램에 표시되는 [공식 Localify 설치 안내](https://github.com/Kimjio/umamusume-localify)를 먼저 확인하세요. clean-game standalone loader는 아직 완료되지 않았습니다.
 - 설치기는 게임 실행 중 파일을 교체하지 않으며, payload 전체를 먼저 검증합니다. 실패하면 현재 설치를 변경하지 않는 것이 목표입니다.
 - 공개 GitHub Release는 인증 정보 없이 조회합니다. 프로그램과 패키지에는 GitHub 토큰이나 재사용 가능한 자격 증명을 포함하지 않습니다.
 
-이 저장소에는 게임 원본 파일, Localify 파일, 사용자 설정, 로그, 롤백 데이터, 빌드 산출물과 인증 정보를 포함하지 않습니다. 프로젝트 소스는 [MIT License](LICENSE)로 배포되며 외부 구성 요소는 각자의 라이선스를 따릅니다.
+이 저장소에는 게임 원본 파일, Localify 파일, 사용자 설정, 로그, 롤백 데이터, 빌드 산출물과 인증 정보를 포함하지 않습니다. 프로젝트 소스는 [MIT License](LICENSE)로 배포되며, 배포 바이너리에 포함된 외부 구성 요소는 [Third-Party Notices](THIRD_PARTY_NOTICES.txt)와 패키지의 .NET 고지를 따릅니다.
 
 > UmaVR은 비공식 팬 프로젝트이며 게임 개발사·배급사와 관련이 없습니다. 게임과 관련 상표·저작물의 권리는 각 권리자에게 있습니다. 사용하려면 정식으로 설치한 게임이 필요합니다.

@@ -12,6 +12,8 @@ internal enum InstallerLanguage
 
 internal static class InstallerText
 {
+    public const string LocalifyRepository = "https://github.com/Kimjio/umamusume-localify";
+
     private static readonly IReadOnlyDictionary<InstallerLanguage, IReadOnlyDictionary<string, string>> Resources =
         new Dictionary<InstallerLanguage, IReadOnlyDictionary<string, string>>
         {
@@ -59,6 +61,9 @@ internal static class InstallerText
         LocalifyStatus.Partial => "LocalifyPartial",
         _ => "LocalifyAbsent"
     });
+
+    public static bool NeedsLocalifyGuide(LocalifyStatus status) =>
+        status != LocalifyStatus.Installed;
 
     public static string ExceptionMessage(Exception exception)
     {
@@ -146,12 +151,14 @@ internal static class InstallerText
         ["PackageVersion"] = "패키지 버전",
         ["InstalledVersion"] = "설치된 버전",
         ["LocalifyStatus"] = "한글패치 상태",
+        ["LocalifyInstall"] = "한글패치 설치",
+        ["LocalifyInstallGuide"] = "공식 Localify 설치 안내 열기",
         ["NotAvailable"] = "사용 불가",
         ["NotInstalled"] = "설치되지 않음",
         ["InvalidGameRoot"] = "올바른 게임 폴더가 아님",
         ["LocalifyInstalled"] = "설치됨 — 완전 보존",
-        ["LocalifyPartial"] = "일부 흔적 감지 — 관련 파일 보존",
-        ["LocalifyAbsent"] = "설치되지 않음 — VR 의존성만 설치",
+        ["LocalifyPartial"] = "설치 불완전 — 공식 안내 확인 필요",
+        ["LocalifyAbsent"] = "설치되지 않음 — 공식 안내 확인 필요",
         ["Install"] = "설치",
         ["Update"] = "업데이트",
         ["Reinstall"] = "다시 설치",
@@ -175,6 +182,7 @@ internal static class InstallerText
         ["SettingsMissing"] = "설정 프로그램이 아직 설치되지 않았습니다.",
         ["Busy"] = "다른 작업이 진행 중입니다.",
         ["ErrorPrefix"] = "오류: {0}",
+        ["OpenLinkFailed"] = "설치 안내를 열지 못했습니다: {0}",
         ["PackagePayloadMissing"] = "패키지 payload 폴더가 없습니다: {0}",
         ["PackageFileMissing"] = "패키지 파일이 없습니다: {0}",
         ["PackageHashMismatch"] = "패키지 파일 해시가 일치하지 않습니다: {0}",
@@ -190,7 +198,7 @@ internal static class InstallerText
         ["InstallStateInvalid"] = "설치 상태 파일이 손상되었습니다.",
         ["InstallStateSchemaUnsupported"] = "지원하지 않는 설치 상태 형식입니다: {0}",
         ["GameRootInvalid"] = "umamusume.exe, GameAssembly.dll, UnityPlayer.dll이 있는 폴더를 선택하세요.",
-        ["LocalifyRequired"] = "현재 릴리스는 localify.dll과 config.json의 externalDlls 로더가 필요합니다.",
+        ["LocalifyRequired"] = "현재 릴리스는 localify.dll과 config.json의 externalDlls 로더가 필요합니다. 인스톨러의 공식 Localify 설치 안내 링크를 확인하세요.",
         ["BootstrapConfigInvalid"] = "config.json의 externalDlls 항목을 안전하게 읽거나 갱신할 수 없습니다.",
         ["GameRunning"] = "게임이 실행 중입니다. 완전히 종료한 뒤 다시 시도하세요.",
         ["UnsafePath"] = "안전하지 않은 패키지 경로입니다: {0}",
@@ -211,12 +219,14 @@ internal static class InstallerText
         ["PackageVersion"] = "Package version",
         ["InstalledVersion"] = "Installed version",
         ["LocalifyStatus"] = "Localify status",
+        ["LocalifyInstall"] = "Install Localify",
+        ["LocalifyInstallGuide"] = "Open the official Localify installation guide",
         ["NotAvailable"] = "Not available",
         ["NotInstalled"] = "Not installed",
         ["InvalidGameRoot"] = "Not a valid game folder",
         ["LocalifyInstalled"] = "Installed — fully preserved",
-        ["LocalifyPartial"] = "Partial traces found — files preserved",
-        ["LocalifyAbsent"] = "Not installed — VR dependencies only",
+        ["LocalifyPartial"] = "Incomplete installation — see the official guide",
+        ["LocalifyAbsent"] = "Not installed — see the official guide",
         ["Install"] = "Install",
         ["Update"] = "Update",
         ["Reinstall"] = "Reinstall",
@@ -240,6 +250,7 @@ internal static class InstallerText
         ["SettingsMissing"] = "The settings application is not installed yet.",
         ["Busy"] = "Another operation is in progress.",
         ["ErrorPrefix"] = "Error: {0}",
+        ["OpenLinkFailed"] = "Could not open the installation guide: {0}",
         ["PackagePayloadMissing"] = "The package payload folder is missing: {0}",
         ["PackageFileMissing"] = "A package file is missing: {0}",
         ["PackageHashMismatch"] = "A package file hash does not match: {0}",
@@ -255,7 +266,7 @@ internal static class InstallerText
         ["InstallStateInvalid"] = "The install-state file is damaged.",
         ["InstallStateSchemaUnsupported"] = "Unsupported install-state format: {0}",
         ["GameRootInvalid"] = "Select the folder containing umamusume.exe, GameAssembly.dll and UnityPlayer.dll.",
-        ["LocalifyRequired"] = "This release requires localify.dll and its config.json externalDlls loader.",
+        ["LocalifyRequired"] = "This release requires localify.dll and its config.json externalDlls loader. Use the official Localify installation link in the installer.",
         ["BootstrapConfigInvalid"] = "The externalDlls entry in config.json cannot be read or updated safely.",
         ["GameRunning"] = "The game is running. Fully close it and try again.",
         ["UnsafePath"] = "Unsafe package path: {0}",
@@ -276,12 +287,14 @@ internal static class InstallerText
         ["PackageVersion"] = "パッケージバージョン",
         ["InstalledVersion"] = "インストール済みバージョン",
         ["LocalifyStatus"] = "Localifyの状態",
+        ["LocalifyInstall"] = "Localifyの導入",
+        ["LocalifyInstallGuide"] = "公式Localifyインストール案内を開く",
         ["NotAvailable"] = "使用不可",
         ["NotInstalled"] = "未インストール",
         ["InvalidGameRoot"] = "正しいゲームフォルダーではありません",
         ["LocalifyInstalled"] = "インストール済み — 完全に保護",
-        ["LocalifyPartial"] = "一部の痕跡を検出 — 関連ファイルを保護",
-        ["LocalifyAbsent"] = "未インストール — VR依存ファイルのみ導入",
+        ["LocalifyPartial"] = "インストール不完全 — 公式案内を確認してください",
+        ["LocalifyAbsent"] = "未インストール — 公式案内を確認してください",
         ["Install"] = "インストール",
         ["Update"] = "アップデート",
         ["Reinstall"] = "再インストール",
@@ -305,6 +318,7 @@ internal static class InstallerText
         ["SettingsMissing"] = "設定アプリはまだインストールされていません。",
         ["Busy"] = "別の処理が実行中です。",
         ["ErrorPrefix"] = "エラー: {0}",
+        ["OpenLinkFailed"] = "インストール案内を開けませんでした: {0}",
         ["PackagePayloadMissing"] = "パッケージのpayloadフォルダーがありません: {0}",
         ["PackageFileMissing"] = "パッケージファイルがありません: {0}",
         ["PackageHashMismatch"] = "パッケージファイルのハッシュが一致しません: {0}",
@@ -320,7 +334,7 @@ internal static class InstallerText
         ["InstallStateInvalid"] = "インストール状態ファイルが破損しています。",
         ["InstallStateSchemaUnsupported"] = "未対応のインストール状態形式です: {0}",
         ["GameRootInvalid"] = "umamusume.exe、GameAssembly.dll、UnityPlayer.dllがあるフォルダーを選択してください。",
-        ["LocalifyRequired"] = "現在のリリースにはlocalify.dllとconfig.jsonのexternalDllsローダーが必要です。",
+        ["LocalifyRequired"] = "現在のリリースにはlocalify.dllとconfig.jsonのexternalDllsローダーが必要です。インストーラーの公式Localify導入リンクを確認してください。",
         ["BootstrapConfigInvalid"] = "config.jsonのexternalDlls項目を安全に読み込み・更新できません。",
         ["GameRunning"] = "ゲームが実行中です。完全に終了してからもう一度お試しください。",
         ["UnsafePath"] = "安全でないパッケージパスです: {0}",
