@@ -24,7 +24,7 @@
 
 設定アプリは`deadpixel134/umamusume-vr`の安定版Releaseから、正確なバージョンZIPとSHA-256のみを選択します。サイズ・hash・package/versionを検証し、ゲーム停止中だけインストールします。失敗時は既存インストールを変更しません。
 
-初期リポジトリはprivateで認証情報を配布しないため、安全な配布方針が決まるまで一般ユーザーの自動更新は利用できません。
+リポジトリとReleaseはpublicで、更新metadataとassetには認証なしでアクセスします。GitHub tokenや再利用可能な認証情報は配布しません。
 
 ## 削除・ロールバック
 

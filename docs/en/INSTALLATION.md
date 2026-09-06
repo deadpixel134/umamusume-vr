@@ -24,7 +24,7 @@ The installer verifies every payload hash before replacement, backs up owned fil
 
 The settings app checks stable Releases from `deadpixel134/umamusume-vr`. It accepts only the exact versioned ZIP and corresponding SHA-256, validates size/hash/package/version, and runs the installer only while the game is stopped. API, download or verification failure leaves the installed version unchanged.
 
-The repository initially remains private and no GitHub credential is embedded. Automatic updates for ordinary users therefore remain unavailable until a safe distribution route is approved.
+The repository and Releases are public and update metadata/assets are accessed without authentication. No GitHub token or reusable credential is embedded.
 
 ## Remove or roll back
 

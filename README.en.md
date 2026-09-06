@@ -7,13 +7,14 @@ Support: [buymeacoffee.com/vrshits](https://buymeacoffee.com/vrshits)
 
 UmaVR is an unofficial Meta Quest/OpenXR VR mod for the DMM release of Umamusume: Pretty Derby. Validated Live scenes use binocular VR and physical 6DoF; all other screens remain the complete aspect-correct original game image on a flat panel. The game UI can be operated with VR controllers.
 
-The Virtual Desktop VDXR route has been tested on hardware. This repository currently contains the **v0.1.0 release candidate**; no stable GitHub Release has been published yet.
+The Virtual Desktop VDXR route has been tested on hardware. The current official version is **v0.1.0**.
 
 ## Documentation
 
 - [Installation, updates and removal](docs/en/INSTALLATION.md)
 - [Usage and controls](docs/en/USAGE.md)
 - [Architecture and safety boundaries](docs/en/ARCHITECTURE.md)
+- [v0.1.0 release notes](docs/releases/v0.1.0.md)
 
 ## Highlights
 
@@ -31,7 +32,7 @@ The Virtual Desktop VDXR route has been tested on hardware. This repository curr
 - Home, Story, Race, Training and character preview remain PANEL because no safe stereo ownership route is available.
 - SteamVR OpenXR and Meta Quest Link/Air Link are provisional and have not been tested in this project.
 
-The current candidate requires an existing compatible `localify.dll` and its `config.json` `externalDlls` loader. The repository starts private, and no reusable GitHub credential is shipped; private Release auto-update therefore remains unavailable to ordinary users until a safe distribution decision is made.
+The current release requires an existing compatible `localify.dll` and its `config.json` `externalDlls` loader. Public GitHub Releases are accessed without authentication, and no reusable GitHub credential is shipped.
 
 This repository excludes original game files, Localify files, user settings, logs, rollback data, build outputs and credentials. Source is provided under the [MIT License](LICENSE); external components retain their own licenses.
 

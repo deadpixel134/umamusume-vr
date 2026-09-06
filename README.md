@@ -8,13 +8,14 @@
 
 우마무스메 프리티 더비 DMM판을 위한 비공식 Meta Quest/OpenXR VR 모드입니다. 검증된 Live 장면은 양안 VR과 물리 6DoF로 표시하고, 그 밖의 화면은 원본 비율을 보존한 평면 패널로 표시합니다. VR 컨트롤러로 게임 UI를 조작할 수 있습니다.
 
-Virtual Desktop의 VDXR 경로로 실기 검증했습니다. 현재 저장소는 첫 정식 배포를 준비하는 **v0.1.0 릴리스 후보**이며, 아직 GitHub Release로 일반 배포된 버전은 없습니다.
+Virtual Desktop의 VDXR 경로로 실기 검증했습니다. 현재 공식 버전은 **v0.1.0**입니다.
 
 ## 문서
 
 - [설치·업데이트·제거](docs/ko/INSTALLATION.md)
 - [사용 방법과 조작법](docs/ko/USAGE.md)
 - [프로그램 구조와 안전 경계](docs/ko/ARCHITECTURE.md)
+- [v0.1.0 릴리스 정보](docs/releases/v0.1.0.md)
 - [English installation](docs/en/INSTALLATION.md) · [English usage](docs/en/USAGE.md)
 - [日本語インストール](docs/ja/INSTALLATION.md) · [日本語の使い方](docs/ja/USAGE.md)
 
@@ -39,7 +40,7 @@ Virtual Desktop의 VDXR 경로로 실기 검증했습니다. 현재 저장소는
 
 - 현재 릴리스 후보는 기존 `localify.dll`과 `config.json`의 `externalDlls` 로더를 사용합니다. clean-game standalone loader는 아직 완료되지 않았습니다.
 - 설치기는 게임 실행 중 파일을 교체하지 않으며, payload 전체를 먼저 검증합니다. 실패하면 현재 설치를 변경하지 않는 것이 목표입니다.
-- 저장소는 초기에는 private입니다. 배포 자격 증명을 프로그램에 넣지 않으므로, 일반 사용자의 private Release 자동 업데이트는 안전한 배포 방식 또는 명시적 공개 전환이 결정될 때까지 사용할 수 없습니다.
+- 공개 GitHub Release는 인증 정보 없이 조회합니다. 프로그램과 패키지에는 GitHub 토큰이나 재사용 가능한 자격 증명을 포함하지 않습니다.
 
 이 저장소에는 게임 원본 파일, Localify 파일, 사용자 설정, 로그, 롤백 데이터, 빌드 산출물과 인증 정보를 포함하지 않습니다. 프로젝트 소스는 [MIT License](LICENSE)로 배포되며 외부 구성 요소는 각자의 라이선스를 따릅니다.
 
