@@ -20,7 +20,9 @@
 6. 설치를 누릅니다. 설치기는 전체 payload hash와 manifest를 먼저 검증한 뒤 파일을 백업·설치하고 `config.json.externalDlls`에 UmaVR DLL을 병합합니다.
 7. `vrmod/tools/UmaVR.Configurator.exe`에서 설정을 확인한 뒤 DMM 런처로 게임을 시작합니다.
 
-기존 `externalDlls` 항목과 `vrmod/config/settings.json`은 보존합니다. 현재 후보는 Localify 자체를 배포하거나 교체하지 않습니다.
+기존 `externalDlls` 항목과 `vrmod/config/settings.json`은 보존합니다. 현재 릴리스는 Localify 자체를 배포하거나 교체하지 않습니다.
+
+압축을 풀면 최상위에는 실행할 `UmaVR.Installer.exe` 하나와 `package-manifest.json`, `payload`, `licenses`만 표시됩니다. 인스톨러와 설치되는 Configurator는 self-contained 단일 EXE이므로 별도의 .NET 설치가 필요하지 않습니다.
 
 ## 자동 업데이트
 

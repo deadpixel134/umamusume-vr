@@ -22,6 +22,8 @@
 The installer verifies every payload hash before replacement, backs up owned files, merges UmaVR into the existing `externalDlls` array, and preserves existing settings and other entries.
 UmaVR does not automatically download, install or replace Localify.
 
+After extraction, the root contains one executable entry point, `UmaVR.Installer.exe`, plus `package-manifest.json`, `payload` and `licenses`. The installer and installed configurator are self-contained single-file applications and do not require a machine-wide .NET installation.
+
 ## Updates
 
 The settings app checks stable Releases from `deadpixel134/umamusume-vr`. It accepts only the exact versioned ZIP and corresponding SHA-256, validates size/hash/package/version, and runs the installer only while the game is stopped. API, download or verification failure leaves the installed version unchanged.

@@ -22,6 +22,8 @@
 インストーラーは全payload hashを先に検証し、既存設定と他の`externalDlls`を維持してUmaVRを追加します。
 UmaVRはLocalifyを自動でダウンロード、導入、置換しません。
 
+展開後の最上位には、実行対象の`UmaVR.Installer.exe`一つと`package-manifest.json`、`payload`、`licenses`のみがあります。インストーラーと導入されるConfiguratorはself-contained単一EXEで、システム全体の.NETインストールは不要です。
+
 ## 自動更新
 
 設定アプリは`deadpixel134/umamusume-vr`の安定版Releaseから、正確なバージョンZIPとSHA-256のみを選択します。サイズ・hash・package/versionを検証し、ゲーム停止中だけインストールします。失敗時は既存インストールを変更しません。

@@ -17,11 +17,10 @@ public sealed class InstallationEngine
         ProductDllRelativePath,
         "vrmod/config/settings.json",
         "vrmod/tools/UmaVR.Configurator.exe",
-        "vrmod/tools/UmaVR.Configurator.dll",
-        "vrmod/tools/UmaVR.Configurator.deps.json",
-        "vrmod/tools/UmaVR.Configurator.runtimeconfig.json",
-        "vrmod/tools/UmaVR.Management.dll",
         "vrmod/LICENSE.txt",
+        "vrmod/THIRD_PARTY_NOTICES.txt",
+        "vrmod/DOTNET_LICENSE.txt",
+        "vrmod/DOTNET_THIRD_PARTY_NOTICES.txt",
     };
     private static readonly JsonSerializerOptions JsonOptions = new()
     {

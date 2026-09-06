@@ -11,10 +11,6 @@ internal static class InstallerSelfTest
         "UmaVR/immersive/umavr_immersive.dll",
         "vrmod/config/settings.json",
         "vrmod/tools/UmaVR.Configurator.exe",
-        "vrmod/tools/UmaVR.Configurator.dll",
-        "vrmod/tools/UmaVR.Configurator.deps.json",
-        "vrmod/tools/UmaVR.Configurator.runtimeconfig.json",
-        "vrmod/tools/UmaVR.Management.dll",
         "vrmod/LICENSE.txt",
         "vrmod/THIRD_PARTY_NOTICES.txt",
         "vrmod/DOTNET_LICENSE.txt",
@@ -58,6 +54,22 @@ internal static class InstallerSelfTest
             Assert(File.ReadAllText(existingSettings) == "user-settings-sentinel", "settings preservation");
             Assert(File.Exists(Path.Combine(game, "UmaVR", "immersive", "umavr_immersive.dll")),
                 "runtime install");
+            string[] installedTools = Directory.GetFiles(Path.Combine(game, "vrmod", "tools"));
+            Assert(installedTools.Length == 1 &&
+                string.Equals(Path.GetFileName(installedTools[0]), "UmaVR.Configurator.exe",
+                    StringComparison.OrdinalIgnoreCase),
+                "single-file configurator install layout");
+            foreach (string notice in new[]
+            {
+                "LICENSE.txt",
+                "THIRD_PARTY_NOTICES.txt",
+                "DOTNET_LICENSE.txt",
+                "DOTNET_THIRD_PARTY_NOTICES.txt"
+            })
+            {
+                Assert(File.Exists(Path.Combine(game, "vrmod", notice)),
+                    $"installed notice: {notice}");
+            }
             JsonObject config = JsonNode.Parse(File.ReadAllText(Path.Combine(game, "config.json")))!
                 .AsObject();
             JsonArray external = config["externalDlls"]!.AsArray();

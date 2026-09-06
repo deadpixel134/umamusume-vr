@@ -124,6 +124,7 @@ Microsoft .NET
 
 The installer and configurator are published as self-contained .NET
 applications. The distribution includes DOTNET_LICENSE.txt and
-DOTNET_THIRD_PARTY_NOTICES.txt alongside the installer and in the installed
-vrmod directory. Those files contain the applicable Microsoft .NET license
-terms and third-party notices from the .NET distribution used for the build.
+DOTNET_THIRD_PARTY_NOTICES.txt in the package `licenses` directory and in the
+installed vrmod directory. Those files contain the applicable Microsoft .NET
+license terms and third-party notices from the .NET distribution used for the
+build.
