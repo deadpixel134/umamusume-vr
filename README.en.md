@@ -39,6 +39,8 @@ The current release requires an existing compatible `localify.dll` and its `conf
 
 - [umamusume-localify](https://github.com/Kimjio/umamusume-localify) — the Localify loader and `externalDlls` integration used by UmaVR
 
-This repository excludes original game files, Localify files, user settings, logs, rollback data, build outputs and credentials. Source is provided under the [MIT License](LICENSE). Components incorporated into distributed binaries are covered by the [Third-Party Notices](THIRD_PARTY_NOTICES.txt) and the packaged .NET notices.
+This repository excludes original game files, Localify files, user settings, logs, rollback data, build outputs and credentials. Source is provided under the [GNU General Public License v3.0 (GPL-3.0-only)](LICENSE). Components incorporated into distributed binaries are covered by the [Third-Party Notices](THIRD_PARTY_NOTICES.txt) and the packaged .NET notices.
+
+See the [release source instructions](docs/RELEASING-SOURCE.md) for corresponding source.
 
 > UmaVR is an unofficial fan project with no affiliation to the game developer or publisher. A legitimate installation of the game is required.

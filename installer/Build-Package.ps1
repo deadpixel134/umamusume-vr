@@ -117,6 +117,14 @@ foreach ($entry in $noticeFiles.GetEnumerator()) {
     Copy-Item -LiteralPath $entry.Value -Destination (Join-Path $payload "vrmod\$($entry.Key)")
 }
 
+$sourceNotice = @"
+Project source license: GNU GPL v3.0 (GPL-3.0-only)
+Project source tag: https://github.com/deadpixel134/umamusume-vr/tree/v$Version
+Release and accompanying source materials: https://github.com/deadpixel134/umamusume-vr/releases/tag/v$Version
+"@
+Add-Content -LiteralPath (Join-Path $payload 'vrmod/THIRD_PARTY_NOTICES.txt') -Value @('', $sourceNotice) -Encoding utf8
+Copy-Item -LiteralPath (Join-Path $payload 'vrmod/THIRD_PARTY_NOTICES.txt') -Destination (Join-Path $packageRoot 'licenses/THIRD_PARTY_NOTICES.txt') -Force
+
 $files = foreach ($file in Get-ChildItem -LiteralPath $payload -Recurse -File | Sort-Object FullName) {
     $relative = [IO.Path]::GetRelativePath($payload, $file.FullName).Replace('\','/')
     [ordered]@{

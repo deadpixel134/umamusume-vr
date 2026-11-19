@@ -47,6 +47,6 @@ Virtual Desktop의 VDXR 경로로 실기 검증했습니다. 현재 공식 버�
 
 - [umamusume-localify](https://github.com/Kimjio/umamusume-localify) — UmaVR가 사용하는 Localify 로더 및 `externalDlls` 통합 기반
 
-이 저장소에는 게임 원본 파일, Localify 파일, 사용자 설정, 로그, 롤백 데이터, 빌드 산출물과 인증 정보를 포함하지 않습니다. 프로젝트 소스는 [MIT License](LICENSE)로 배포되며, 배포 바이너리에 포함된 외부 구성 요소는 [Third-Party Notices](THIRD_PARTY_NOTICES.txt)와 패키지의 .NET 고지를 따릅니다.
+이 저장소에는 게임 원본 파일, Localify 파일, 사용자 설정, 로그, 롤백 데이터, 빌드 산출물과 인증 정보를 포함하지 않습니다. 프로젝트 소스는 [GNU General Public License v3.0 (GPL-3.0-only)](LICENSE)로 배포되며, 배포 바이너리에 포함된 외부 구성 요소는 [Third-Party Notices](THIRD_PARTY_NOTICES.txt)와 패키지의 .NET 고지를 따릅니다.
 
 > UmaVR은 비공식 팬 프로젝트이며 게임 개발사·배급사와 관련이 없습니다. 게임과 관련 상표·저작물의 권리는 각 권리자에게 있습니다. 사용하려면 정식으로 설치한 게임이 필요합니다.
