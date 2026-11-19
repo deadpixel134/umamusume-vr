@@ -1,0 +1,20 @@
+<Project>
+  <Target Name="WriteThirdPartyRuntimeNotices" AfterTargets="Publish"
+          Condition="'$(ThirdPartyNoticeDirectory)' != '' and '$(SelfContained)' == 'true'">
+    <ItemGroup>
+      <_NoticeCorePack Include="@(ResolvedRuntimePack)" Condition="'%(ResolvedRuntimePack.FrameworkName)' == 'Microsoft.NETCore.App'" />
+      <_NoticeDesktopPack Include="@(ResolvedRuntimePack)" Condition="'%(ResolvedRuntimePack.FrameworkName)' == 'Microsoft.WindowsDesktop.App'" />
+    </ItemGroup>
+    <Error Condition="'@(_NoticeCorePack->Count())' != '1' or '@(_NoticeDesktopPack->Count())' != '1'"
+           Text="Expected one .NET Core and one Windows Desktop runtime pack for the release." />
+    <Copy SourceFiles="@(_NoticeCorePack->'%(PackageDirectory)/LICENSE.TXT')"
+          DestinationFiles="$(ThirdPartyNoticeDirectory)/NETCore-LICENSE.txt" />
+    <Copy SourceFiles="@(_NoticeCorePack->'%(PackageDirectory)/THIRD-PARTY-NOTICES.TXT')"
+          DestinationFiles="$(ThirdPartyNoticeDirectory)/NETCore-THIRD-PARTY-NOTICES.txt" />
+    <Copy SourceFiles="@(_NoticeDesktopPack->'%(PackageDirectory)/LICENSE')"
+          DestinationFiles="$(ThirdPartyNoticeDirectory)/WindowsDesktop-LICENSE.txt" />
+    <WriteLinesToFile File="$(ThirdPartyNoticeDirectory)/runtime-packs.txt"
+                      Lines="@(_NoticeCorePack->'%(NuGetPackageId)/%(NuGetPackageVersion)');@(_NoticeDesktopPack->'%(NuGetPackageId)/%(NuGetPackageVersion)')"
+                      Overwrite="true" Encoding="UTF-8" />
+  </Target>
+</Project>

@@ -31,6 +31,9 @@ $configProject = Join-Path $vrmodRoot 'settings\src\UmaVR.Configurator\UmaVR.Con
 $installerProject = Join-Path $PSScriptRoot 'src\UmaVR.Installer\UmaVR.Installer.csproj'
 $configPublish = Join-Path $buildRoot 'configurator-publish'
 $installerPublish = Join-Path $buildRoot 'installer-publish'
+$noticeTargets = Join-Path $PSScriptRoot 'RuntimeNotices.targets'
+$configNoticeDirectory = "$configPublish-notices"
+$installerNoticeDirectory = "$installerPublish-notices"
 foreach ($path in @($configPublish, $installerPublish)) {
     if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force }
 }
@@ -38,6 +41,7 @@ foreach ($path in @($configPublish, $installerPublish)) {
 dotnet publish $configProject -c Release -r win-x64 --self-contained true `
     -p:Version=$Version -p:DebugType=None -p:DebugSymbols=false `
     -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `
+    "-p:CustomAfterMicrosoftCommonTargets=$noticeTargets" "-p:ThirdPartyNoticeDirectory=$configNoticeDirectory" `
     -p:EnableCompressionInSingleFile=true -o $configPublish
 if ($LASTEXITCODE) { throw "Configurator publish failed: $LASTEXITCODE" }
 $configFiles = @(Get-ChildItem -LiteralPath $configPublish -File)
@@ -54,6 +58,7 @@ if ($LASTEXITCODE) { throw "Configurator layout verification failed: $LASTEXITCO
 dotnet publish $installerProject -c Release -r win-x64 --self-contained true `
     -p:Version=$Version -p:DebugType=None -p:DebugSymbols=false `
     -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `
+    "-p:CustomAfterMicrosoftCommonTargets=$noticeTargets" "-p:ThirdPartyNoticeDirectory=$installerNoticeDirectory" `
     -p:EnableCompressionInSingleFile=true -o $installerPublish
 if ($LASTEXITCODE) { throw "Installer publish failed: $LASTEXITCODE" }
 $installerFiles = @(Get-ChildItem -LiteralPath $installerPublish -File)
@@ -77,11 +82,30 @@ Copy-Item -LiteralPath (Join-Path $configPublish 'UmaVR.Configurator.exe') `
     -Destination $toolsDestination
 Copy-Item -LiteralPath (Join-Path $installerPublish 'UmaVR.Installer.exe') `
     -Destination $packageRoot
+$licenseFile = Join-Path $buildRoot 'DOTNET_LICENSE.txt'
+$noticeFile = Join-Path $buildRoot 'DOTNET_THIRD_PARTY_NOTICES.txt'
+$packDirectories = @($configNoticeDirectory, $installerNoticeDirectory)
+$licenseSections = foreach ($directory in $packDirectories) {
+    $packs = Get-Content -LiteralPath (Join-Path $directory 'runtime-packs.txt')
+    @(
+        "Microsoft .NET runtime packs: $($packs -join ', ')",
+        '=== .NET Core license ===',
+        (Get-Content -LiteralPath (Join-Path $directory 'NETCore-LICENSE.txt') -Raw),
+        '=== Windows Desktop license ===',
+        (Get-Content -LiteralPath (Join-Path $directory 'WindowsDesktop-LICENSE.txt') -Raw)
+    ) -join ([Environment]::NewLine * 2)
+}
+$noticeSections = foreach ($directory in $packDirectories) {
+    Get-Content -LiteralPath (Join-Path $directory 'NETCore-THIRD-PARTY-NOTICES.txt') -Raw
+}
+$licenseSections | Select-Object -Unique | Set-Content -LiteralPath $licenseFile -Encoding utf8
+$noticeSections | Select-Object -Unique | Set-Content -LiteralPath $noticeFile -Encoding utf8
+
 $noticeFiles = [ordered]@{
     'LICENSE.txt' = Join-Path $vrmodRoot 'LICENSE'
     'THIRD_PARTY_NOTICES.txt' = Join-Path $vrmodRoot 'THIRD_PARTY_NOTICES.txt'
-    'DOTNET_LICENSE.txt' = Join-Path $PSScriptRoot 'assets\dotnet\LICENSE.txt'
-    'DOTNET_THIRD_PARTY_NOTICES.txt' = Join-Path $PSScriptRoot 'assets\dotnet\ThirdPartyNotices.txt'
+    'DOTNET_LICENSE.txt' = $licenseFile
+    'DOTNET_THIRD_PARTY_NOTICES.txt' = $noticeFile
 }
 foreach ($entry in $noticeFiles.GetEnumerator()) {
     if (-not (Test-Path -LiteralPath $entry.Value -PathType Leaf)) {

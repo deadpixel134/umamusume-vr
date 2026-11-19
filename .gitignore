@@ -33,6 +33,7 @@
 # Installer, package builder, update policy and tests.
 !/installer/
 !/installer/Build-Package.ps1
+!/installer/RuntimeNotices.targets
 !/installer/assets/
 !/installer/assets/**
 !/installer/src/
