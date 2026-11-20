@@ -1,8 +1,8 @@
-[한국어](INSTALLATION.md) | [English](../en/INSTALLATION.md) | [日本語](../ja/INSTALLATION.md)
+[한국어](../ko/INSTALLATION.md) | [English](../en/INSTALLATION.md) | [日本語](../ja/INSTALLATION.md)
 
 # 설치·업데이트·제거
 
-[프로젝트 홈](../../README.md) · [사용 방법](USAGE.md) · [구조](ARCHITECTURE.md)
+[프로젝트 홈](../../README.ko.md) · [사용 방법](USAGE.md) · [구조](ARCHITECTURE.md)
 
 ## 준비물
 
@@ -13,7 +13,7 @@
 ## 설치
 
 1. 게임과 DMM 런처에서 실행 중인 `umamusume.exe`를 완전히 종료합니다.
-2. 정식 Release가 제공되면 `UmaVR-vX.Y.Z.zip`과 같은 Release의 `.sha256`을 내려받습니다.
+2. [v0.1.1 릴리스](https://github.com/deadpixel134/umamusume-vr/releases/tag/v0.1.1)에서 `UmaVR-v0.1.1.zip`과 `UmaVR-v0.1.1.zip.sha256`을 내려받습니다.
 3. ZIP을 게임 폴더 밖에 풀고 `UmaVR.Installer.exe`를 실행합니다.
 4. `umamusume.exe`, `GameAssembly.dll`, `UnityPlayer.dll`이 있는 폴더를 선택합니다.
 5. Localify가 없거나 불완전하면 인스톨러에 나타나는 **공식 Localify 설치 안내 열기**를 눌러 설치를 마친 뒤 **새로고침**합니다.

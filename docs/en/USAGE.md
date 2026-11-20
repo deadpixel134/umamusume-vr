@@ -1,6 +1,10 @@
-# Usage and controls
+[한국어](../ko/USAGE.md) | [English](../en/USAGE.md) | [日本語](../ja/USAGE.md)
 
-[Project home](../../README.en.md) · [Installation](INSTALLATION.md) · [Architecture](ARCHITECTURE.md)
+# Usage · Public release v0.1.1
+
+[Controller guide](CONTROLS.md) · [Settings](SETTINGS.md) · [Troubleshooting](TROUBLESHOOTING.md)
+
+[Project home](../../README.md) · [Installation](INSTALLATION.md) · [Architecture](ARCHITECTURE.md)
 
 - Live uses binocular stereo and physical HMD 6DoF. Other contexts use the complete original game screen on a front panel.
 - Right aim ray targets the UI; Trigger or A clicks/drags; B goes back.

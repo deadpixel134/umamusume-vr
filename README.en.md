@@ -1,4 +1,4 @@
-[한국어](README.md) | [English](README.en.md) | [日本語](README.ja.md)
+## [English](README.md) | [한국어](README.ko.md) | [日本語](README.ja.md)
 
 # UmaVR
 
@@ -9,22 +9,56 @@ UmaVR is an unofficial Meta Quest/OpenXR VR mod for the DMM release of Umamusume
 
 The Virtual Desktop VDXR route has been tested on hardware. The current official version is **v0.1.1**.
 
+[Download v0.1.1](https://github.com/deadpixel134/umamusume-vr/releases/tag/v0.1.1) · [Install, update or remove](docs/en/INSTALLATION.md) · [Controller guide](docs/en/CONTROLS.md)
+
+## Requirements
+
+Windows 11 x64, the DMM edition of Umamusume, Meta Quest controllers and a working PC OpenXR connection. The tested setup uses Direct3D 11, Virtual Desktop (VDXR) and Localify 1.50.0.
+
+## 1. Install
+
+Close the game. Download `UmaVR-v0.1.1.zip` and its `.sha256` from the release assets. Extract the ZIP outside the game folder and run `UmaVR.Installer.exe`. Select the folder containing `umamusume.exe` and install. If Localify is missing, follow the installer’s Localify guide and refresh.
+
+## 2. Launch in VR
+
+Connect the headset to your PC and start your VDXR session. Launch Umamusume through DMM. The title and menus appear on a front panel. Enter a supported Live performance to see the stage in stereo with head tracking.
+
+## 3. Display and controls
+
+Aim at the game panel with the right controller. Trigger or A selects and drags, and B goes back. In Live, left Grip opens the auxiliary panel. In v0.1.1 the right stick moves and the left stick turns in 30° steps. The diagram below shows the current development defaults: left stick to move, right stick to turn in 30° steps.
+
+[![UmaVR Development build · Controller guide](docs/images/vr-controls-dev-en.png)](docs/en/CONTROLS.md)
+
+## 4. Change settings
+
+Close the game and open `vrmod/tools/UmaVR.Configurator.exe`. Set world scale to adjust the perceived size of the stage, and eye render scale to adjust image resolution. Save your changes before launching again.
+
+## 5. Update
+
+Close the game and open `vrmod/tools/UmaVR.Configurator.exe`. The v0.1.1 configurator checks for a newer public release at startup. Select **Check for updates** to check again. When an update is available, it verifies the ZIP and launches the installer automatically.
+
+To update manually, extract the new ZIP from [Releases](https://github.com/deadpixel134/umamusume-vr/releases) outside the game directory. Run its `UmaVR.Installer.exe` and select your existing game folder.
+
+[Update steps and error messages](docs/en/UPDATE.md)
+
+## Uninstall or roll back
+
+Close the game, reopen the package installer and choose removal or rollback. The installer preserves user settings and checks backups before restoring files.
+
+## Troubleshooting
+
+If a panel is visible but clicks do nothing, focus the game window on your PC. If the headset has no image, check the active OpenXR runtime before restarting the game.
+
 ## Documentation
 
-- [Installation, updates and removal](docs/en/INSTALLATION.md)
-- [Usage and controls](docs/en/USAGE.md)
-- [Architecture and safety boundaries](docs/en/ARCHITECTURE.md)
-- [v0.1.1 release notes](docs/releases/v0.1.1.md)
-
-## Highlights
-
-- OpenXR stereo, physical HMD 6DoF and world scale in Live
-- Complete original game screen as the front panel outside Live
-- Grip-toggled auxiliary panel, controller ray and circular cursor in immersive mode
-- Right-stick locomotion, left-stick 30° snap turn and complete hand-role swap
-- Unbounded reference movement speed with optional automatic world-scale compensation
-- Korean, English and Japanese settings UI for render, camera, scale, movement and supported VFX controls
-- Installer/update design with full payload hashes, a package manifest, settings preservation and coexistence with other `externalDlls`
+- [Install, update or remove](docs/en/INSTALLATION.md)
+- [Usage](docs/en/USAGE.md)
+- [Controller guide](docs/en/CONTROLS.md)
+- [Settings](docs/en/SETTINGS.md)
+- [Updates](docs/en/UPDATE.md)
+- [Troubleshooting](docs/en/TROUBLESHOOTING.md)
+- [Release notes](docs/en/RELEASE_NOTES.md)
+- [Architecture](docs/en/ARCHITECTURE.md)
 
 ## Current support boundary
 

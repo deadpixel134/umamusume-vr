@@ -1,4 +1,4 @@
-[한국어](../ko/INSTALLATION.md) | [English](../en/INSTALLATION.md) | [日本語](INSTALLATION.md)
+[한국어](../ko/INSTALLATION.md) | [English](../en/INSTALLATION.md) | [日本語](../ja/INSTALLATION.md)
 
 # インストール・更新・削除
 
@@ -13,7 +13,7 @@
 ## インストール
 
 1. `umamusume.exe`を完全に終了します。
-2. 安定版Releaseが提供されたら`UmaVR-vX.Y.Z.zip`と同じReleaseの`.sha256`を取得します。
+2. [v0.1.1 リリース](https://github.com/deadpixel134/umamusume-vr/releases/tag/v0.1.1)から `UmaVR-v0.1.1.zip` と `UmaVR-v0.1.1.zip.sha256` を取得します。
 3. ゲームフォルダー外へ展開し、`UmaVR.Installer.exe`を起動します。
 4. `umamusume.exe`、`GameAssembly.dll`、`UnityPlayer.dll`があるフォルダーを選択してインストールします。
 5. Localifyが未導入または不完全な場合は、インストーラーの**公式Localifyインストール案内を開く**から導入し、状態を更新します。

@@ -1,8 +1,8 @@
-[한국어](../ko/INSTALLATION.md) | [English](INSTALLATION.md) | [日本語](../ja/INSTALLATION.md)
+[한국어](../ko/INSTALLATION.md) | [English](../en/INSTALLATION.md) | [日本語](../ja/INSTALLATION.md)
 
 # Installation, updates and removal
 
-[Project home](../../README.en.md) · [Usage](USAGE.md) · [Architecture](ARCHITECTURE.md)
+[Project home](../../README.md) · [Usage](USAGE.md) · [Architecture](ARCHITECTURE.md)
 
 ## Requirements
 
@@ -13,7 +13,7 @@
 ## Install
 
 1. Fully close `umamusume.exe` and the running game session.
-2. When a stable Release is available, download `UmaVR-vX.Y.Z.zip` and its `.sha256` asset.
+2. Download `UmaVR-v0.1.1.zip` and `UmaVR-v0.1.1.zip.sha256` from the [v0.1.1 release](https://github.com/deadpixel134/umamusume-vr/releases/tag/v0.1.1).
 3. Extract outside the game folder and run `UmaVR.Installer.exe`.
 4. Select the folder containing `umamusume.exe`, `GameAssembly.dll` and `UnityPlayer.dll`, then install.
 5. If Localify is absent or incomplete, use **Open the official Localify installation guide** in the installer, finish that installation, and refresh the status.

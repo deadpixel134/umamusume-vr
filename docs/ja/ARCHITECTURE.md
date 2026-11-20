@@ -1,7 +1,9 @@
+[한국어](../ko/ARCHITECTURE.md) | [English](../en/ARCHITECTURE.md) | [日本語](../ja/ARCHITECTURE.md)
+
 # 構成と安全境界
 
 - `immersive/src`: Localify `externalDlls`で読み込むnative OpenXR/D3D11 runtime。
-- `settings/src`: schema 9設定の検証・保存とGitHub Releaseの検証済みstaging。
+- `settings/src`: schema 10設定の検証・保存とGitHub Releaseの検証済みstaging。
 - `installer/src/UmaVR.Management`: payload integrity、path containment、backup、rollback、process guard。
 - `installer/src/UmaVR.Installer`: 多言語UIと自動更新handoff。
 

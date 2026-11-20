@@ -1,7 +1,9 @@
+[한국어](../ko/ARCHITECTURE.md) | [English](../en/ARCHITECTURE.md) | [日本語](../ja/ARCHITECTURE.md)
+
 # Architecture and safety boundaries
 
 - `immersive/src`: native OpenXR/D3D11 runtime loaded through Localify `externalDlls`.
-- `settings/src`: validated schema-9 settings and verified GitHub Release staging.
+- `settings/src`: validated schema-10 settings and verified GitHub Release staging.
 - `installer/src/UmaVR.Management`: payload integrity, path containment, backup, rollback and process guards.
 - `installer/src/UmaVR.Installer`: localized UI and the automatic-update handoff.
 

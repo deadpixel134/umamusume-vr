@@ -1,9 +1,11 @@
+[한국어](../ko/ARCHITECTURE.md) | [English](../en/ARCHITECTURE.md) | [日本語](../ja/ARCHITECTURE.md)
+
 # 프로그램 구조와 안전 경계
 
-[프로젝트 홈](../../README.md) · [설치](INSTALLATION.md) · [사용](USAGE.md)
+[프로젝트 홈](../../README.ko.md) · [설치](INSTALLATION.md) · [사용](USAGE.md)
 
 - `immersive/src`: Localify `externalDlls`로 로드되는 native OpenXR/D3D11 runtime입니다.
-- `settings/src`: versioned schema 9 설정을 검증·원자 저장하고 GitHub Release 업데이트를 스테이징합니다.
+- `settings/src`: versioned schema 10 설정을 검증·원자 저장하고 GitHub Release 업데이트를 스테이징합니다.
 - `installer/src/UmaVR.Management`: payload hash, 경로 containment, 백업·롤백·제거와 실행 중 게임 차단을 소유합니다.
 - `installer/src/UmaVR.Installer`: 한국어·영어·일본어 설치 UI와 종료 대기 후 자동 업데이트를 실행합니다.
 

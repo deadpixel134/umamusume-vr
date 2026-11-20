@@ -1,4 +1,4 @@
-[한국어](README.md) | [English](README.en.md) | [日本語](README.ja.md)
+## [English](README.md) | [한국어](README.ko.md) | [日本語](README.ja.md)
 
 # UmaVR
 
@@ -9,22 +9,56 @@ UmaVRは、DMM版『ウマ娘 プリティーダービー』向けの非公式Me
 
 Virtual DesktopのVDXR経路で実機検証済みです。現在の公式バージョンは**v0.1.1**です。
 
-## ドキュメント
+[v0.1.1をダウンロード](https://github.com/deadpixel134/umamusume-vr/releases/tag/v0.1.1) · [インストール・更新・削除](docs/ja/INSTALLATION.md) · [操作ガイド](docs/ja/CONTROLS.md)
+
+## 必要環境
+
+Windows 11 x64、DMM版ウマ娘、Meta Questコントローラー、PC OpenXR環境が必要です。実機で確認した構成はDirect3D 11、Virtual Desktop（VDXR）、Localify 1.50.0です。
+
+## 1. インストール
+
+ゲームを終了し、リリースのAssetsから `UmaVR-v0.1.1.zip` と `.sha256` を取得します。ゲームフォルダーの外に展開し、`UmaVR.Installer.exe` を実行します。`umamusume.exe` のあるフォルダーを選んでインストールします。Localifyが見つからない場合はインストーラーの案内に従って導入し、再読み込みします。
+
+## 2. VRで起動
+
+ヘッドセットをPCに接続し、VDXRセッションを開始してからDMMでウマ娘を起動します。タイトルとメニューは正面パネルに表示されます。対応するライブに入ると頭の動きに合わせてステージを立体視できます。
+
+## 3. 画面と操作
+
+右手でゲームパネルを指し、トリガーまたはAで選択・ドラッグ、Bで戻ります。ライブ中は左グリップで補助パネルを開きます。公開版v0.1.1では右スティックで移動し、左スティックで30°ずつ回転します。下図は現在の開発ビルドの初期配置です。左スティックで移動し、右スティックで30°ずつ回転します。
+
+[![UmaVR 開発ビルド · 操作ガイド](docs/images/vr-controls-dev-ja.png)](docs/ja/CONTROLS.md)
+
+## 4. 設定の変更
+
+ゲームを終了し、`vrmod/tools/UmaVR.Configurator.exe` を開きます。ステージの見かけの大きさはワールドスケール、映像の解像度は両眼の描画倍率で調整します。設定を保存してからゲームを再起動します。
+
+## 5. アップデート
+
+ゲームを終了して `vrmod/tools/UmaVR.Configurator.exe` を開きます。公開版v0.1.1は起動時に新しい公開版を確認します。再確認するには **更新を確認** を選びます。更新がある場合はZIPを検証してインストーラーを自動起動します。
+
+手動で更新するには、[Releases](https://github.com/deadpixel134/umamusume-vr/releases) の新しいZIPをゲームフォルダーの外に展開します。同梱の `UmaVR.Installer.exe` を実行し、既存のゲームフォルダーを選んでインストールします。
+
+[更新手順とエラーの確認](docs/ja/UPDATE.md)
+
+## 削除とロールバック
+
+ゲームを終了し、パッケージのインストーラーから削除またはロールバックを選びます。ユーザー設定は保持され、ファイル復元前にバックアップが確認されます。
+
+## トラブルシューティング
+
+カーソルが動いても選択できない場合は、PCのゲームウィンドウをアクティブにしてください。ヘッドセットに映像が出ない場合は、有効なOpenXRランタイムを確認してからゲームを再起動してください。
+
+## 関連ドキュメント
 
 - [インストール・更新・削除](docs/ja/INSTALLATION.md)
-- [使い方と操作](docs/ja/USAGE.md)
-- [構成と安全境界](docs/ja/ARCHITECTURE.md)
-- [v0.1.1リリース情報](docs/releases/v0.1.1.md)
-
-## 主な機能
-
-- LiveでのOpenXRステレオ、物理HMD 6DoF、ワールドスケール
-- Live以外では完全な元ゲーム画面を正面パネルに表示
-- 補助パネル、コントローラーレイ、円形カーソル
-- 右スティック移動、左スティック30°スナップターン、左右の役割交換
-- 上限のない基準移動速度と、任意で有効にできるワールドスケール連動の自動速度補正
-- 描画・カメラ・スケール・移動・対応VFX用の韓国語・英語・日本語設定GUI
-- SHA-256、パッケージmanifest、設定保持、他の`externalDlls`との共存を行うインストール/更新設計
+- [使い方](docs/ja/USAGE.md)
+- [操作ガイド](docs/ja/CONTROLS.md)
+- [設定](docs/ja/SETTINGS.md)
+- [アップデート](docs/ja/UPDATE.md)
+- [トラブルシューティング](docs/ja/TROUBLESHOOTING.md)
+- [リリースノート](docs/ja/RELEASE_NOTES.md)
+- [構成](docs/ja/ARCHITECTURE.md)
 
 ## 現在の対応範囲
 

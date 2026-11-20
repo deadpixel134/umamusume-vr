@@ -1,8 +1,10 @@
-[한국어](USAGE.md) | [English](../en/USAGE.md) | [日本語](../ja/USAGE.md)
+[한국어](../ko/USAGE.md) | [English](../en/USAGE.md) | [日本語](../ja/USAGE.md)
 
-# 사용 방법과 조작법
+# 사용 방법 · 공개판 v0.1.1
 
-[프로젝트 홈](../../README.md) · [설치](INSTALLATION.md) · [구조](ARCHITECTURE.md)
+[컨트롤러 조작](CONTROLS.md) · [설정](SETTINGS.md) · [문제 해결](TROUBLESHOOTING.md)
+
+[프로젝트 홈](../../README.ko.md) · [설치](INSTALLATION.md) · [구조](ARCHITECTURE.md)
 
 ## 화면 표시
 

@@ -1,4 +1,8 @@
-# 使い方と操作
+[한국어](../ko/USAGE.md) | [English](../en/USAGE.md) | [日本語](../ja/USAGE.md)
+
+# 使い方 · 公開版 v0.1.1
+
+[コントローラー操作](CONTROLS.md) · [設定](SETTINGS.md) · [トラブルシューティング](TROUBLESHOOTING.md)
 
 [プロジェクト](../../README.ja.md) · [インストール](INSTALLATION.md) · [構成](ARCHITECTURE.md)
 

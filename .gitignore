@@ -4,6 +4,7 @@
 # Public/product-owned repository files.
 !/.gitignore
 !/README.md
+!/README.ko.md
 !/README.en.md
 !/README.ja.md
 !/LICENSE
