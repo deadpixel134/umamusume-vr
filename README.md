@@ -34,6 +34,8 @@ Connect the headset to your PC and start your VDXR session. Launch Umamusume thr
 
 ## 3. Display and controls
 
+UmaVR detects collisions between VR hands and supported characters. On contact, the character moves and the controller vibrates. Before starting the game, read the character contact notice in the Configurator to the end and accept it once.
+
 Aim at the game panel with the right controller. Trigger or A selects and drags, and B goes back. In Live, left Grip opens the auxiliary panel. Default controls are left stick to move, right stick to turn in 30° steps.
 
 [![UmaVR Development build · Controller guide](docs/images/vr-controls-dev-en.png)](docs/en/CONTROLS.md)
