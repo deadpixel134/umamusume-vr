@@ -6,7 +6,7 @@ Windows 11 x64、DMM版ウマ娘、Meta Questコントローラー、PC OpenXR�
 
 ## VR 6DoFステレオ対応画面
 
-[v0.1.13（プレリリース）](https://github.com/deadpixel134/umamusume-vr/releases/tag/v0.1.13)が対応する画面のうち、頭の回転と実際の位置移動に視点が追従することを実機で確認した画面です。
+[v0.1.13](https://github.com/deadpixel134/umamusume-vr/releases/tag/v0.1.13)が対応する画面のうち、頭の回転と実際の位置移動に視点が追従することを実機で確認した画面です。
 
 - ホーム — キャラクターと背景が表示されるメイン画面
 - ライブ — 対応する公演のステージ画面
@@ -18,15 +18,15 @@ Windows 11 x64、DMM版ウマ娘、Meta Questコントローラー、PC OpenXR�
 制作者: [@TBluebox12](https://x.com/TBluebox12)  
 支援: [buymeacoffee.com/vrshits](https://buymeacoffee.com/vrshits)
 
-UmaVRは、DMM版『ウマ娘 プリティーダービー』向けの非公式Meta Quest/OpenXR VR Modです。安定版v0.1.1では、検証済みのLiveで両眼VRと物理6DoFを使用し、それ以外の画面は元の比率を維持した完全なゲーム画面を平面パネルで表示します。VRコントローラーでゲームUIを操作できます。
+UmaVRは、DMM版『ウマ娘 プリティーダービー』向けの非公式Meta Quest/OpenXR VR Modです。VRコントローラーでゲームUIを操作できます。
 
-Virtual DesktopのVDXR経路で実機検証済みです。現在の公式バージョンは**v0.1.1**です。
+Virtual DesktopのVDXR経路で実機検証済みです。現在の公式バージョンは**v0.1.13**です。
 
-[v0.1.1をダウンロード](https://github.com/deadpixel134/umamusume-vr/releases/tag/v0.1.1) · [インストール・更新・削除](docs/ja/INSTALLATION.md) · [操作ガイド](docs/ja/CONTROLS.md)
+[v0.1.13をダウンロード](https://github.com/deadpixel134/umamusume-vr/releases/tag/v0.1.13) · [インストール・更新・削除](docs/ja/INSTALLATION.md) · [操作ガイド](docs/ja/CONTROLS.md)
 
 ## 1. インストール
 
-ゲームを終了し、リリースのAssetsから `UmaVR-v0.1.1.zip` と `.sha256` を取得します。ゲームフォルダーの外に展開し、`UmaVR.Installer.exe` を実行します。`umamusume.exe` のあるフォルダーを選んでインストールします。Localifyが見つからない場合はインストーラーの案内に従って導入し、再読み込みします。
+ゲームを終了し、リリースのAssetsから `UmaVR-v0.1.13.zip` と `.sha256` を取得します。ゲームフォルダーの外に展開し、`UmaVR.Installer.exe` を実行します。`umamusume.exe` のあるフォルダーを選んでインストールします。Localifyが見つからない場合はインストーラーの案内に従って導入し、再読み込みします。
 
 ## 2. VRで起動
 
@@ -34,7 +34,7 @@ Virtual DesktopのVDXR経路で実機検証済みです。現在の公式バー�
 
 ## 3. 画面と操作
 
-右手でゲームパネルを指し、トリガーまたはAで選択・ドラッグ、Bで戻ります。ライブ中は左グリップで補助パネルを開きます。公開版v0.1.1では右スティックで移動し、左スティックで30°ずつ回転します。下図は現在の開発ビルドの初期配置です。左スティックで移動し、右スティックで30°ずつ回転します。
+右手でゲームパネルを指し、トリガーまたはAで選択・ドラッグ、Bで戻ります。ライブ中は左グリップで補助パネルを開きます。左スティックで移動し、右スティックで30°ずつ回転します。
 
 [![UmaVR 開発ビルド · 操作ガイド](docs/images/vr-controls-dev-ja.png)](docs/ja/CONTROLS.md)
 
@@ -44,7 +44,7 @@ Virtual DesktopのVDXR経路で実機検証済みです。現在の公式バー�
 
 ## 5. アップデート
 
-ゲームを終了して `vrmod/tools/UmaVR.Configurator.exe` を開きます。公開版v0.1.1は起動時に新しい公開版を確認します。再確認するには **更新を確認** を選びます。更新がある場合はZIPを検証してインストーラーを自動起動します。
+ゲームを終了して `vrmod/tools/UmaVR.Configurator.exe` を開きます。公開版v0.1.13は起動時に新しい公開版を確認します。再確認するには **更新を確認** を選びます。更新を選んで適用すると、ZIPを検証してインストーラーを起動します。
 
 手動で更新するには、[Releases](https://github.com/deadpixel134/umamusume-vr/releases) の新しいZIPをゲームフォルダーの外に展開します。同梱の `UmaVR.Installer.exe` を実行し、既存のゲームフォルダーを選んでインストールします。
 
@@ -73,7 +73,6 @@ Virtual DesktopのVDXR経路で実機検証済みです。現在の公式バー�
 
 - 検証済み: Windows 11 x64、ゲーム2.30.0、Unity 2022.3.62f2、Direct3D 11、Virtual Desktop VDXR 1.0.10、Localify 1.50.0ローダー経路
 - Liveはimmersive stereo/6DoF/VFX/コントローラーに対応します。
-- v0.1.1 — Home,Story、Race、Training、キャラクタープレビューは安全なステレオ所有経路がないためPANEL表示です。
 - SteamVR OpenXRとMeta Quest Link/Air Linkは暫定対応で、本プロジェクトでは未検証です。
 
 現在のリリースは互換性のある既存`localify.dll`と`config.json`の`externalDlls`ローダーを必要とします。検出されない場合は、インストーラーに表示される[公式Localifyインストール案内](https://github.com/Kimjio/umamusume-localify)を先に確認してください。公開GitHub Releaseには認証なしでアクセスし、再利用可能なGitHub認証情報は配布しません。
