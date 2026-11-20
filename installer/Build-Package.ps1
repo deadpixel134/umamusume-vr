@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [ValidatePattern('^\d+\.\d+\.\d+$')]
-    [string]$Version = '0.1.1'
+    [string]$Version = '0.1.13'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -125,6 +125,7 @@ Release and accompanying source materials: https://github.com/deadpixel134/umamu
 Add-Content -LiteralPath (Join-Path $payload 'vrmod/THIRD_PARTY_NOTICES.txt') -Value @('', $sourceNotice) -Encoding utf8
 Copy-Item -LiteralPath (Join-Path $payload 'vrmod/THIRD_PARTY_NOTICES.txt') -Destination (Join-Path $packageRoot 'licenses/THIRD_PARTY_NOTICES.txt') -Force
 
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'assets\CONTROLS.txt') -Destination (Join-Path $payload 'vrmod\CONTROLS.txt')
 $files = foreach ($file in Get-ChildItem -LiteralPath $payload -Recurse -File | Sort-Object FullName) {
     $relative = [IO.Path]::GetRelativePath($payload, $file.FullName).Replace('\','/')
     [ordered]@{
@@ -138,16 +139,18 @@ $manifest = [ordered]@{
     schemaVersion = 1
     version = $Version
     loader = 'localify-external-dll'
+    updateLayoutVersion = 1
     localifyPolicy = 'require-compatible-existing'
     files = @($files)
 }
 $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath `
     (Join-Path $packageRoot 'package-manifest.json') -Encoding utf8NoBOM
 
-$expectedRootEntries = @('licenses', 'package-manifest.json', 'payload', 'UmaVR.Installer.exe') | Sort-Object
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'assets\CONTROLS.txt') -Destination $packageRoot
+$expectedRootEntries = @('CONTROLS.txt', 'licenses', 'package-manifest.json', 'payload', 'UmaVR.Installer.exe') | Sort-Object
 $actualRootEntries = @(Get-ChildItem -LiteralPath $packageRoot | Select-Object -ExpandProperty Name | Sort-Object)
 if (Compare-Object $expectedRootEntries $actualRootEntries) {
-    throw "Package root is not the bounded four-entry layout: $($actualRootEntries -join ', ')"
+    throw "Package root is not the expected layout: $($actualRootEntries -join ', ')"
 }
 $actualTools = @(Get-ChildItem -LiteralPath $toolsDestination -File | Select-Object -ExpandProperty Name)
 if ($actualTools.Count -ne 1 -or $actualTools[0] -ne 'UmaVR.Configurator.exe') {

@@ -14,20 +14,16 @@ internal static class AutoUpdateRunner
         string packageRoot = Required(args, "--package-root");
         string cleanupRoot = Required(args, "--cleanup-update");
         int waitPid = int.Parse(Required(args, "--wait-pid"));
-        WaitForProcess(waitPid);
+        InstallerText.Initialize();
 
         string logPath = UpdateLogPath();
+        InstallationResult result;
         try
         {
+            WaitForProcess(waitPid);
             AppendLog(logPath, "Automatic update started.");
-            InstallationResult result = new InstallationEngine().Install(gameRoot, packageRoot);
+            result = new InstallationEngine().Install(gameRoot, packageRoot, automaticUpdate: true);
             AppendLog(logPath, $"Automatic update installed v{result.Version}.");
-            LaunchConfigurator(
-                gameRoot,
-                cleanupRoot,
-                "--updated-version",
-                result.Version);
-            return 0;
         }
         catch (Exception exception)
         {
@@ -35,7 +31,7 @@ internal static class AutoUpdateRunner
             string errorFile = Path.Combine(cleanupRoot, "update-error.txt");
             try
             {
-                File.WriteAllText(errorFile, exception.Message);
+                File.WriteAllText(errorFile, InstallerText.ExceptionMessage(exception));
                 LaunchConfigurator(gameRoot, cleanupRoot, "--update-error-file", errorFile);
             }
             catch (Exception relaunchException)
@@ -43,6 +39,16 @@ internal static class AutoUpdateRunner
                 AppendLog(logPath, $"Configurator relaunch failed: {relaunchException.Message}");
             }
             return 1;
+        }
+        try
+        {
+            LaunchConfigurator(gameRoot, cleanupRoot, "--updated-version", result.Version);
+            return 0;
+        }
+        catch (Exception exception)
+        {
+            AppendLog(logPath, $"Installation completed, but the settings application could not reopen: {exception.Message}");
+            return 2;
         }
     }
 

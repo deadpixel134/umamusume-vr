@@ -166,7 +166,12 @@ internal sealed class InstallerForm : Form
 
         _gameRoot.Text = InstallationEngine.FindInitialGameRoot();
         ApplyLanguage(languageChanged: false);
-        Shown += (_, _) => RefreshStatus();
+        Shown += (_, _) =>
+        {
+            RefreshStatus();
+            if (_gameRoot.Text.Length == 0)
+                Browse(this, EventArgs.Empty);
+        };
     }
 
     private void ApplyLanguage(bool languageChanged)
@@ -209,6 +214,13 @@ internal sealed class InstallerForm : Form
         }
         try
         {
+            if (string.IsNullOrWhiteSpace(_gameRoot.Text))
+            {
+                _currentStatus = null;
+                RefreshStatusLabels();
+                SetStatus("GameRootInvalid");
+                return;
+            }
             _currentStatus = _engine.Inspect(_gameRoot.Text, _packageRoot);
             RefreshStatusLabels();
             if (setReady)

@@ -26,13 +26,13 @@ internal sealed class UpdateService : IDisposable
     public static string CurrentVersion =>
         Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.0.0";
 
-    public async Task<AvailableUpdate?> CheckAsync(CancellationToken cancellationToken)
+    public async Task<AvailableUpdate?> CheckAsync(string currentVersion, CancellationToken cancellationToken)
     {
         GithubRelease release = await _http.GetFromJsonAsync<GithubRelease>(
             $"{RepositoryApi}/releases/latest",
             cancellationToken) ?? throw new InvalidDataException("GitHub returned an empty release.");
         if (release.Draft || release.Prerelease ||
-            !ReleaseUpdatePolicy.IsNewer(CurrentVersion, release.TagName))
+            !ReleaseUpdatePolicy.IsNewer(currentVersion, release.TagName))
         {
             return null;
         }
@@ -41,26 +41,19 @@ internal sealed class UpdateService : IDisposable
         string normalizedVersion = version.ToString(3);
         string archiveName = $"UmaVR-v{normalizedVersion}.zip";
         string checksumName = archiveName + ".sha256";
-        GithubAsset archive = release.Assets.SingleOrDefault(asset =>
-            string.Equals(asset.Name, archiveName, StringComparison.Ordinal)) ??
-            throw new InvalidDataException($"Release asset is missing: {archiveName}");
-        GithubAsset? checksum = release.Assets.SingleOrDefault(asset =>
-            string.Equals(asset.Name, checksumName, StringComparison.Ordinal));
-        if (checksum is null && string.IsNullOrWhiteSpace(archive.Digest))
-        {
-            throw new InvalidDataException($"Release checksum is missing: {checksumName}");
-        }
-        if (archive.Size <= 0 || archive.Size > MaximumAssetBytes)
-        {
-            throw new InvalidDataException("The release archive size is invalid.");
-        }
-
+        var archives = release.Assets.Where(a => a.Name == archiveName).ToArray();
+        var checksums = release.Assets.Where(a => a.Name == checksumName).ToArray();
+        GithubAsset? archive = archives.Length == 1 ? archives[0] : null;
+        GithubAsset? checksum = checksums.Length == 1 ? checksums[0] : null;
+        bool usable = archive != null && archive.Size is > 0 and <= MaximumAssetBytes &&
+            checksums.Length <= 1 && (checksum != null || !string.IsNullOrWhiteSpace(archive.Digest));
         return new AvailableUpdate(
             normalizedVersion,
             archiveName,
-            archive.BrowserDownloadUrl,
-            archive.Digest,
-            checksum?.BrowserDownloadUrl);
+            usable ? archive!.BrowserDownloadUrl : string.Empty,
+            archive?.Digest,
+            checksum?.BrowserDownloadUrl, release.Body,
+            $"https://github.com/deadpixel134/umamusume-vr/releases/tag/{Uri.EscapeDataString(release.TagName)}");
     }
 
     public async Task<StagedUpdate> StageAsync(
@@ -124,6 +117,10 @@ internal sealed class UpdateService : IDisposable
             throw;
         }
     }
+
+    public static void Discard(StagedUpdate update) =>
+        TryDeleteContainedUpdate(update.StagingRoot, Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "UmaVR", "updates"));
 
     public static bool IsGameRunning()
     {
@@ -211,6 +208,7 @@ internal sealed class UpdateService : IDisposable
         }
 
         cancellationToken.ThrowIfCancellationRequested();
+        new InstallationEngine().VerifyAutomaticUpdate(gameRoot, packageRoot);
         InstallationStatus status = new InstallationEngine().Inspect(gameRoot, packageRoot);
         if (!status.IsGameRoot || !status.PackageAvailable ||
             !string.Equals(status.PackageVersion, version, StringComparison.Ordinal))
@@ -241,6 +239,9 @@ internal sealed class UpdateService : IDisposable
 
     private sealed class GithubRelease
     {
+        [JsonPropertyName("body")]
+        public string? Body { get; set; }
+
         [JsonPropertyName("tag_name")]
         public string TagName { get; set; } = string.Empty;
 
@@ -275,7 +276,7 @@ internal sealed record AvailableUpdate(
     string ArchiveName,
     string ArchiveUrl,
     string? Digest,
-    string? ChecksumUrl);
+    string? ChecksumUrl, string? Body, string Page);
 
 internal sealed record StagedUpdate(
     string Version,

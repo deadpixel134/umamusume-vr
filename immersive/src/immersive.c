@@ -19,8 +19,8 @@
 #define LINE_LIMIT 2048
 #define MAX_EYES 2
 #define MAX_IMAGES 8
-#define PANEL_DISTANCE_M 3.0f
-#define PANEL_SAFE_FRACTION 0.50f
+#define PANEL_DISTANCE_M 4.0f
+#define PANEL_SAFE_FRACTION 0.375f
 #define AUX_PANEL_HEIGHT_M 0.55f
 #define AUX_PANEL_UP_OFFSET_M 0.18f
 #define AUX_PANEL_FORWARD_OFFSET_M 0.32f
@@ -60,74 +60,17 @@ static ULONGLONG attach_tick;
 
 /* ---------------- telemetry ---------------- */
 
-static void write_record(const char* evidence, const char* event, const char* detail) {
-    LONG slot = InterlockedIncrement(&records_written);
-    if (slot > RECORD_LIMIT || !log_path[0]) return;
-    SYSTEMTIME now; GetSystemTime(&now);
-    char line[LINE_LIMIT];
-    int length = snprintf(line, sizeof(line),
-        "{\"schema\":1,\"probe_id\":\"%s\",\"evidence_id\":\"%s\",\"event\":\"%s\","
-        "\"timestamp_utc\":\"%04u-%02u-%02uT%02u:%02u:%02u.%03uZ\",%s}\r\n",
-        PROBE_ID, evidence, event, now.wYear, now.wMonth, now.wDay,
-        now.wHour, now.wMinute, now.wSecond, now.wMilliseconds, detail);
-    if (length <= 0 || length >= (int)sizeof(line)) return;
-    AcquireSRWLockExclusive(&log_lock);
-    HANDLE file = CreateFileW(log_path, FILE_APPEND_DATA | GENERIC_READ,
-        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_ALWAYS,
-        FILE_ATTRIBUTE_NORMAL, NULL);
-    if (file != INVALID_HANDLE_VALUE) {
-        LARGE_INTEGER size;
-        if (GetFileSizeEx(file, &size) && size.QuadPart + length <= LOG_LIMIT) {
-            DWORD done = 0; WriteFile(file, line, (DWORD)length, &done, NULL);
-        }
-        CloseHandle(file);
-    }
-    ReleaseSRWLockExclusive(&log_lock);
-}
-
-static void json_escape(const char* in, char* out, size_t out_chars) {
-    size_t o = 0;
-    for (size_t i = 0; in[i] && o + 6 < out_chars; ++i) {
-        unsigned char c = (unsigned char)in[i];
-        if (c == '\\' || c == '"') { out[o++] = '\\'; out[o++] = (char)c; }
-        else if (c < 0x20) { o += (size_t)snprintf(out + o, out_chars - o, "\\u%04x", c); }
-        else out[o++] = (char)c;
-    }
-    out[o] = 0;
-}
+#include "telemetry.h"
+#include "telemetry_frame.h"
+/* Published with the texture pair while both game-side keyed mutexes are held. */
+static StereoCacheTelemetry game_pair_telemetry;
 
 static void write_disabled(const char* stage, const char* extra) {
-    char detail[512];
-    snprintf(detail, sizeof(detail), "\"status\":\"disabled\",\"stage\":\"%s\"%s%s",
-        stage, extra ? "," : "", extra ? extra : "");
+    char detail[512], escaped[256];
+    json_escape(stage, escaped, sizeof(escaped));
+    telemetry_snprintf(detail, sizeof(detail), "\"status\":\"disabled\",\"stage\":\"%s\"%s%s",
+        escaped, extra ? "," : "", extra ? extra : "");
     write_record(PROBE_ID, "disabled", detail);
-}
-
-static LONG WINAPI panel_veh(EXCEPTION_POINTERS* ep) {
-    if (ep->ExceptionRecord && ep->ExceptionRecord->ExceptionCode == 0xC0000005 &&
-        InterlockedCompareExchange(&fault_logged, 1, 0) == 0) {
-        void* ip = (void*)ep->ContextRecord->Rip;
-        HMODULE mod = NULL;
-        char modname[MAX_PATH] = "?";
-        DWORD offset = 0;
-        if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
-                GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCWSTR)ip, &mod) && mod) {
-            char narrow[MAX_PATH];
-            GetModuleFileNameA(mod, narrow, MAX_PATH);
-            narrow[MAX_PATH - 1] = 0;
-            json_escape(narrow, modname, sizeof(modname));
-            offset = (DWORD)((ULONG_PTR)ip - (ULONG_PTR)mod);
-        }
-        char detail[512];
-        snprintf(detail, sizeof(detail),
-            "\"status\":\"av\",\"ip\":\"%p\",\"module\":\"%s\",\"offset\":%lu,"
-            "\"access\":%lu,\"fault_addr\":\"%p\"",
-            ip, modname, (unsigned long)offset,
-            (unsigned long)(ep->ExceptionRecord->ExceptionInformation[0]),
-            (void*)ep->ExceptionRecord->ExceptionInformation[1]);
-        write_record(PROBE_ID, "crash", detail);
-    }
-    return EXCEPTION_CONTINUE_SEARCH;
 }
 
 /* ================= Unity/IL2CPP authored source adapter =================
@@ -154,6 +97,27 @@ typedef struct MethodInfo { Il2CppMethodPointer methodPointer; } MethodInfo;
 typedef struct Il2CppObject { Il2CppClass* klass; void* monitor; } Il2CppObject;
 typedef struct Il2CppString { Il2CppObject object; int32_t length; uint16_t chars[1]; } Il2CppString;
 typedef struct Il2CppArray { Il2CppObject object; void* bounds; uintptr_t max_length; Il2CppObject* vector[1]; } Il2CppArray;
+#include "request_dispatch.h"
+#include "end_frame_bridge.h"
+static RdApi request_dispatch_api;
+static RdBinding request_dispatch_binding;
+static EfBridge end_frame_bridge;
+static void report_end_frame_callback(const EfSnapshot* s) {
+    char detail[1024];
+    telemetry_snprintf(detail, sizeof(detail),
+        "\"status\":\"%s\",\"event_result\":\"%s\",\"owner_thread\":%lu,\"callback_thread\":%lu,"
+        "\"registration_attempted\":%ld,\"registration_returned\":%ld,\"disarmed\":%ld,"
+        "\"frame_available\":%ld,\"frame\":%ld,\"callbacks\":%lld,\"wrong_thread\":%lld,"
+        "\"nested\":%lld,\"repeated\":%lld,\"late\":%lld,\"inline\":%lld,\"own_render_depth\":%ld,"
+        "\"phase_verified\":false,\"entry_verified\":false,\"tokens_issued\":0,\"producer_called\":false",
+        ef_status_name(s->state), ef_status_name(s->event), (unsigned long)s->owner_thread,
+        (unsigned long)s->last_thread, s->registration_attempted, s->registration_returned, s->disarmed,
+        s->frame_available, s->frame, (long long)s->callbacks, (long long)s->wrong_thread,
+        (long long)s->nested, (long long)s->repeated, (long long)s->late, (long long)s->inline_callbacks, s->own_render_depth);
+    write_record("IMMERSIVE-SOURCE", "scheduler_callback_bridge", detail);
+}
+/* This boundary is deliberately unused until an owned-eye adapter supplies
+   evidenced request support, non-reentrant entry and completion ownership. */
 typedef struct Scene { int32_t handle; } Scene;
 typedef struct Vec3 { float x, y, z; } Vec3;
 typedef struct Quat { float x, y, z, w; } Quat;
@@ -184,7 +148,7 @@ typedef Il2CppReflectionType* (*type_get_object_fn)(const Il2CppType*);
 typedef Il2CppObject* (*object_new_fn)(Il2CppClass*);
 typedef Il2CppMethodPointer (*resolve_icall_fn)(const char*);
 typedef Il2CppThread* (*thread_current_fn)(void);
-typedef Scene (*get_active_scene_fn)(void);
+typedef Scene (*get_active_scene_fn)(const MethodInfo*);
 typedef Il2CppString* (*get_scene_name_fn)(int32_t);
 typedef Il2CppArray* (*find_objects_fn)(Il2CppReflectionType*, int32_t, int32_t);
 typedef Il2CppObject* (*get_object_fn)(Il2CppObject*);
@@ -208,11 +172,21 @@ typedef void (*set_quat_injected_fn)(Il2CppObject*, const Quat*);
 typedef void (*set_matrix4x4_injected_fn)(Il2CppObject*, const Matrix4x4*);
 typedef void (*destroy_object_fn)(Il2CppObject*, const MethodInfo*);
 
+typedef struct HomeRenderViews {
+    XrPosef eye[2];
+    XrFovf fov[2];
+    XrSpace space;
+    XrTime time;
+} HomeRenderViews;
+static HomeRenderViews home_pair_views, home_cached_views;
 typedef struct EyeOptics {
+    HomeRenderViews render_views;
     XrFovf fov[2];
     float half_ipd_m;
     XrPosef origin_center;
     XrPosef current_center;
+    XrQuaternionf return_orientation;
+    BOOL return_orientation_valid;
     Vec3 artificial_position;
     float artificial_yaw;
     float artificial_pitch;
@@ -222,9 +196,15 @@ typedef struct EyeOptics {
 } EyeOptics;
 
 static SRWLOCK eye_source_lock = SRWLOCK_INIT;
+/* Unity thread only. Live temporarily moves the authored camera for each eye. */
+static struct {Vec3 center; Quat rotation; EyeOptics optics;} live_contact_view;
 static volatile LONG requested_eye_width;
 static volatile LONG requested_eye_height;
 static volatile LONG source_generation;
+/* LIVE source retirement proof is independent of shared-pair publication.
+   Only authored-source invalidation advances this monotonic watermark. */
+static volatile LONG live_retired_through;
+static LONG current_authored_generation;
 static volatile LONG published_eye_generation;
 static volatile LONG64 eye_pair_serial;
 static volatile LONG64 eye_pair_tick;
@@ -251,6 +231,9 @@ static Vec3 authored_pose_anchor_position;
 static Quat authored_pose_anchor_rotation;
 static BOOL authored_pose_anchor_valid;
 static BOOL live_camera_follow;
+#include "camera_follow.h"
+static CameraFollowAnchor live_follow_anchor;
+static volatile LONG return_camera_generation, follow_display_state, camera_follow_default_on=1;
 static BOOL live_camera_follow_setting_loaded;
 static float eye_render_scale = 1.0f;
 static BOOL eye_render_scale_setting_loaded;
@@ -264,9 +247,11 @@ static float nav_snap_angle_rad = NAV_SNAP_ANGLE_DEFAULT_RAD;
 /* Persisted as navigationHandsSwapped for schema-v3 compatibility, but the
    product contract swaps the complete primary/secondary controller roles. */
 static BOOL controller_hands_swapped;
+static BOOL swap_move_sticks=TRUE, grab_panel_hand, grab_with_trigger;
+static float move_deadzone=NAV_STICK_DEADZONE;
 static BOOL post_processing_enabled = TRUE;
 static BOOL blur_effect_enabled = TRUE;
-static BOOL depth_of_field_enabled = TRUE;
+static BOOL depth_of_field_enabled = FALSE;
 static BOOL diffusion_effect_enabled = TRUE;
 static BOOL bloom_effect_enabled = TRUE;
 static BOOL global_fog_effect_enabled = TRUE;
@@ -289,6 +274,57 @@ static BOOL film_roll_effect_enabled = TRUE;
 static BOOL hatching_effect_enabled = TRUE;
 static BOOL letter_box_effect_enabled = TRUE;
 static BOOL rain_splash_effect_enabled = TRUE;
+typedef struct { int id,group; const char* key; BOOL* game_value; const WCHAR *ko,*en,*ja; } VfxOption;
+static const VfxOption live_vfx_options[]={
+    {123,0,"postProcessingEnabled",&post_processing_enabled,L"전체 후처리",L"All post-processing",L"全体の後処理"},
+    {122,0,NULL,NULL,L"오라",L"Aura",L"オーラ"},
+    {101,1,"blurEnabled",&blur_effect_enabled,L"블러",L"Blur",L"ブラー"},
+    {105,1,"dofDiffusionBloomOverlayEnabled",&dof_diffusion_bloom_overlay_enabled,L"DoF·확산·블룸 묶음",L"DoF / diffusion / bloom",L"被写界深度・拡散・ブルーム"},
+    {105,1,"depthOfFieldEnabled",&depth_of_field_enabled,L"피사계 심도 (부분)",L"Depth of field (partial)",L"被写界深度（一部）"},
+    {105,1,"diffusionEnabled",&diffusion_effect_enabled,L"확산",L"Diffusion",L"拡散"},
+    {105,1,"bloomEnabled",&bloom_effect_enabled,L"블룸",L"Bloom",L"ブルーム"},
+    {106,1,"tiltShiftEnabled",&tilt_shift_effect_enabled,L"틸트 시프트",L"Tilt shift",L"チルトシフト"},
+    {107,1,"radialBlurEnabled",&radial_blur_effect_enabled,L"방사형 블러",L"Radial blur",L"放射状ブラー"},
+    {115,1,"bgBlurEnabled",&bg_blur_effect_enabled,L"배경 블러",L"Background blur",L"背景ブラー"},
+    {102,2,"sunShaftsEnabled",&sun_shafts_effect_enabled,L"햇살 광선",L"Sun shafts",L"太陽光線"},
+    {103,2,"indirectLightShaftsEnabled",&indirect_light_shafts_effect_enabled,L"간접 광선",L"Indirect shafts",L"間接光線"},
+    {104,2,"transmittedLightEnabled",&transmitted_light_effect_enabled,L"투과광",L"Transmitted light",L"透過光"},
+    {121,2,"globalFogEnabled",&global_fog_effect_enabled,L"안개",L"Global fog",L"フォグ"},
+    {110,3,"chromaticAberrationEnabled",&chromatic_aberration_effect_enabled,L"색수차",L"Chromatic aberration",L"色収差"},
+    {111,3,"toneCurveEnabled",&tone_curve_effect_enabled,L"톤 커브",L"Tone curve",L"トーンカーブ"},
+    {112,3,"exposureEnabled",&exposure_effect_enabled,L"노출",L"Exposure",L"露出"},
+    {113,3,"colorCorrectionEnabled",&color_correction_effect_enabled,L"색 보정",L"Color correction",L"色補正"},
+    {114,3,"colorGradingEnabled",&color_grading_effect_enabled,L"색 그레이딩",L"Color grading",L"カラーグレーディング"},
+    {108,4,"fluctuationEnabled",&fluctuation_effect_enabled,L"화면 흔들림 효과",L"Fluctuation",L"揺らぎ"},
+    {109,4,"lensDistortionEnabled",&lens_distortion_effect_enabled,L"렌즈 왜곡",L"Lens distortion",L"レンズ歪み"},
+    {116,4,"vortexEnabled",&vortex_effect_enabled,L"소용돌이",L"Vortex",L"渦"},
+    {117,4,"filmRollEnabled",&film_roll_effect_enabled,L"필름 롤",L"Film roll",L"フィルムロール"},
+    {118,4,"hatchingEnabled",&hatching_effect_enabled,L"해칭",L"Hatching",L"ハッチング"},
+    {119,4,"letterBoxEnabled",&letter_box_effect_enabled,L"레터박스",L"Letterbox",L"レターボックス"},
+    {120,4,"rainSplashEnabled",&rain_splash_effect_enabled,L"빗방울",L"Rain splash",L"雨しぶき"},
+};
+enum { VFX_COUNT=sizeof(live_vfx_options)/sizeof(live_vfx_options[0]) };
+_Static_assert(VFX_COUNT<31,"VFX options must fit a single atomic snapshot");
+static volatile LONG live_vfx_mask,home_vfx_allowed=TRUE,home_vfx_disabled;
+static BOOL read_home_vfx_mask(const char* text,LONG* mask){
+    const char* key="\"homeVfxDisabled\"";
+    const char* p=strstr(text,key);
+    if(!p){*mask=0;return TRUE;}
+    p+=strlen(key);
+    if(strstr(p,key))return FALSE;
+    p+=strspn(p," \t\r\n");
+    if(*p++!=':')return FALSE;
+    p+=strspn(p," \t\r\n");
+    if(*p<'0'||*p>'9')return FALSE;
+    char* end;
+    long number=strtol(p,&end,10);
+    end+=strspn(end," \t\r\n");
+    if((*end!=',' && *end!='}') || number<0 || number>=1L<<VFX_COUNT)return FALSE;
+    *mask=number;
+    return TRUE;
+}
+static BOOL vfx_log_change;
+static uint32_t live_vfx_camera_root;
 static BOOL parse_json_bool_setting(const char* text, const char* key, BOOL* value);
 static BOOL parse_json_float_setting(const char* text, const char* key, float* value);
 /* The first LOCAL pose is available while the user is still looking at the
@@ -355,7 +391,10 @@ static find_objects_fn unity_find_objects;
 static get_object_fn component_get_game_object;
 static get_object_fn component_get_transform;
 static get_components_internal_fn gameobject_get_components;
-static get_active_scene_fn original_get_active_scene;
+static get_active_scene_fn frame_get_active_scene;
+static const MethodInfo *frame_scene_method,*frame_tasks_method;
+static void (*original_execute_tasks)(const MethodInfo*);
+static int (*scene_frame_count)(void);
 static get_scene_name_fn scene_get_name;
 static get_float_fn camera_get_depth;
 static get_float_fn camera_get_aspect;
@@ -369,6 +408,7 @@ static Il2CppReflectionType* component_reflection_type;
 static Il2CppClass* rendertexture_class;
 static const MethodInfo* mi_camera_set_target;
 static const MethodInfo* mi_camera_set_aspect;
+static const MethodInfo* mi_camera_set_near_clip;
 static const MethodInfo* mi_camera_render;
 static const MethodInfo* mi_rt_ctor;
 static const MethodInfo* mi_rt_create;
@@ -474,6 +514,14 @@ static void physical_orientation_deltas(const EyeOptics* optics,
         float* yaw, float* pitch, float* roll) {
     Quat origin = xr_to_unity_quat(optics->origin_center.orientation);
     Quat current = xr_to_unity_quat(optics->current_center.orientation);
+    if(optics->return_orientation_valid) {
+        float neutral_yaw, neutral_pitch, current_yaw, current_pitch;
+        quat_to_yaw_pitch_roll(xr_to_unity_quat(optics->return_orientation), &neutral_yaw, &neutral_pitch, NULL);
+        quat_to_yaw_pitch_roll(current, &current_yaw, &current_pitch, roll);
+        if(yaw) *yaw=shortest_angle_delta(neutral_yaw,current_yaw);
+        if(pitch) *pitch=shortest_angle_delta(neutral_pitch,current_pitch);
+        return;
+    }
     float origin_yaw, origin_pitch, origin_roll;
     float current_yaw, current_pitch, current_roll;
     quat_to_yaw_pitch_roll(origin, &origin_yaw, &origin_pitch, &origin_roll);
@@ -481,6 +529,20 @@ static void physical_orientation_deltas(const EyeOptics* optics,
     if (yaw) *yaw = shortest_angle_delta(origin_yaw, current_yaw);
     if (pitch) *pitch = shortest_angle_delta(origin_pitch, current_pitch);
     if (roll) *roll = shortest_angle_delta(origin_roll, current_roll);
+}
+
+/* Map physical displacements into the same reference used by snap-turn and return.
+   Roll and head lean must never rotate a hand translation across the floor. */
+static Quat tracking_to_navigation(const EyeOptics* optics) {
+    float reference_yaw;
+    XrQuaternionf reference=optics->return_orientation_valid?optics->return_orientation:optics->origin_center.orientation;
+    quat_to_yaw_pitch_roll(xr_to_unity_quat(reference),&reference_yaw,NULL,NULL);
+    return quat_multiply(quat_from_yaw_pitch_roll(optics->artificial_yaw,optics->artificial_pitch,0),
+        quat_from_yaw_pitch_roll(-reference_yaw,0,0));
+}
+static Vec3 physical_displacement(const EyeOptics* optics) {
+    XrVector3f p=optics->current_center.position,o=optics->origin_center.position;
+    return quat_rotate(tracking_to_navigation(optics),(Vec3){p.x-o.x,p.y-o.y,o.z-p.z});
 }
 
 static BOOL commit_immersive_environment_origin(EyeOptics* optics) {
@@ -505,10 +567,10 @@ static float effective_navigation_speed_mps(float configured_speed,
 
 static XrVector2f navigation_apply_deadzone(XrVector2f input) {
     float magnitude = sqrtf(input.x * input.x + input.y * input.y);
-    if (!isfinite(magnitude) || magnitude <= NAV_STICK_DEADZONE)
+    if (!isfinite(magnitude) || magnitude <= move_deadzone)
         return (XrVector2f){0.0f, 0.0f};
     if (magnitude > 1.0f) magnitude = 1.0f;
-    float scaled = (magnitude - NAV_STICK_DEADZONE) / (1.0f - NAV_STICK_DEADZONE);
+    float scaled = (magnitude - move_deadzone) / (1.0f - move_deadzone);
     float original = sqrtf(input.x * input.x + input.y * input.y);
     if (!(original > 0.0f)) return (XrVector2f){0.0f, 0.0f};
     return (XrVector2f){input.x * scaled / original, input.y * scaled / original};
@@ -519,6 +581,7 @@ static uint32_t apply_navigation_input(EyeOptics* optics, XrVector2f move,
         BOOL* turn_y_latched) {
     if (!optics || !optics->origin_valid || !turn_x_latched || !turn_y_latched)
         return 0;
+    Vec3 before_snap=physical_displacement(optics);
     uint32_t changed = 0;
     if (fabsf(turn.x) < NAV_SNAP_RELEASE) *turn_x_latched = FALSE;
     if (fabsf(turn.y) < NAV_SNAP_RELEASE) *turn_y_latched = FALSE;
@@ -535,6 +598,12 @@ static uint32_t apply_navigation_input(EyeOptics* optics, XrVector2f move,
         changed |= NAV_STEP_SNAPPED;
     }
 
+    if(changed & NAV_STEP_SNAPPED){
+        Vec3 after=physical_displacement(optics);
+        optics->artificial_position.x+=before_snap.x-after.x;
+        optics->artificial_position.y+=before_snap.y-after.y;
+        optics->artificial_position.z+=before_snap.z-after.z;
+    }
     move = navigation_apply_deadzone(move);
     if (nav_locomotion_enabled && dt_seconds > 0.0f && isfinite(dt_seconds) &&
             (fabsf(move.x) > 0.0001f || fabsf(move.y) > 0.0001f)) {
@@ -577,7 +646,6 @@ static BOOL compose_unity_eye_pose(const Vec3* base_position, const Quat* base_r
         !position || !rotation || eye < 0 || eye > 1 ||
         !isfinite(perceived_world_scale) || perceived_world_scale < WORLD_SCALE_MIN) return FALSE;
     float inverse_world_scale = 1.0f / perceived_world_scale;
-    Quat origin = xr_to_unity_quat(optics->origin_center.orientation);
     float base_yaw, base_pitch, base_roll;
     float physical_yaw, physical_pitch, physical_roll;
     quat_to_yaw_pitch_roll(*base_rotation, &base_yaw, &base_pitch, &base_roll);
@@ -589,12 +657,7 @@ static BOOL compose_unity_eye_pose(const Vec3* base_position, const Quat* base_r
         base_yaw + optics->artificial_yaw + physical_yaw,
         final_pitch, (authored_rotation_follow ? base_roll : 0.0f) + physical_roll);
 
-    Vec3 xr_delta = {
-        optics->current_center.position.x - optics->origin_center.position.x,
-        optics->current_center.position.y - optics->origin_center.position.y,
-        optics->current_center.position.z - optics->origin_center.position.z};
-    Vec3 unity_delta = {xr_delta.x, xr_delta.y, -xr_delta.z};
-    unity_delta = quat_rotate(quat_conjugate(origin), unity_delta);
+    Vec3 unity_delta=physical_displacement(optics);
     unity_delta.x += optics->artificial_position.x;
     unity_delta.y += optics->artificial_position.y;
     unity_delta.z += optics->artificial_position.z;
@@ -660,6 +723,8 @@ enum AuthoredEyeComponentMask {
         AUTHORED_EYE_HOME_CONTROLLER | AUTHORED_EYE_HOME_IMAGE_EFFECT
 };
 
+#include "base_source_capability.h"
+
 static uint32_t classify_authored_eye_component(Il2CppObject* component) {
     if (component_is(component, "UnityEngine", "Camera")) return AUTHORED_EYE_CAMERA;
     if (component_is(component, "Gallop", "LiveImageEffect")) return AUTHORED_EYE_LIVE_IMAGE_EFFECT;
@@ -704,7 +769,7 @@ static BOOL collect_home_owner_components(Il2CppObject* camera, HomeOwnerCompone
         out->controller && out->image_effect && out->camera_data;
 }
 
-static FieldInfo* find_vfx_field(Il2CppClass* owner, const char* expected_name) {
+static FieldInfo* lookup_vfx_field(Il2CppClass* owner, const char* expected_name) {
     if (!owner || !expected_name || !il2cpp_class_get_fields || !il2cpp_field_get_name) return NULL;
     unsigned depth = 0;
     while (owner && depth++ < 16) {
@@ -720,6 +785,16 @@ static FieldInfo* find_vfx_field(Il2CppClass* owner, const char* expected_name) 
     return NULL;
 }
 
+/* Metadata lives for the game domain. Cache field descriptors, never effect
+   values or scene objects, across the hot eye-render path. */
+static FieldInfo* find_vfx_field(Il2CppClass* owner,const char* name) {
+    static struct {Il2CppClass* owner;const char* name;FieldInfo* field;} cache[96];
+    static unsigned used;
+    for(unsigned i=0;i<used;i++)if(cache[i].owner==owner && !strcmp(cache[i].name,name))return cache[i].field;
+    FieldInfo* field=lookup_vfx_field(owner,name);
+    if(used<96){cache[used].owner=owner;cache[used].name=name;cache[used++].field=field;}
+    return field;
+}
 static BOOL write_vfx_value(VfxFieldOverride* resolved, const void* value) {
     if (!resolved || !resolved->parameter || !resolved->effect_field ||
         !resolved->value_field || !value || !il2cpp_field_get_value_object ||
@@ -781,9 +856,9 @@ static void restore_vfx_overrides(void) {
     }
     memset(&vfx_master_override, 0, sizeof(vfx_master_override));
     memset(vfx_overrides, 0, sizeof(vfx_overrides));
-    if (restored) {
+    if (restored && vfx_log_change) {
         char detail[160];
-        snprintf(detail, sizeof(detail),
+        telemetry_snprintf(detail, sizeof(detail),
             "\"status\":\"restored\",\"field_count\":%u,\"original_objects_mutated\":false",
             restored);
         write_record("SETTINGS-008", "vfx_override_restore", detail);
@@ -803,7 +878,7 @@ static void apply_vfx_overrides(Il2CppObject* camera_data) {
         color_grading_effect_enabled && bg_blur_effect_enabled &&
         vortex_effect_enabled && film_roll_effect_enabled &&
         hatching_effect_enabled && letter_box_effect_enabled && rain_splash_effect_enabled) {
-        write_record("SETTINGS-008", "vfx_override_apply",
+        if(vfx_log_change)write_record("SETTINGS-008", "vfx_override_apply",
             "\"status\":\"authored_preserved\",\"post_processing_enabled\":true,"
             "\"all_22_effect_slots_enabled\":true");
         return;
@@ -813,7 +888,7 @@ static void apply_vfx_overrides(Il2CppObject* camera_data) {
         !il2cpp_field_get_value_object || !il2cpp_field_get_value ||
         !il2cpp_field_get_type || !il2cpp_type_get_type ||
         !il2cpp_field_set_value || !il2cpp_object_unbox) {
-        write_record("SETTINGS-008", "vfx_override_apply",
+        if(vfx_log_change)write_record("SETTINGS-008", "vfx_override_apply",
             "\"status\":\"fail_open\",\"reason\":\"metadata_or_write_api_unavailable\"");
         return;
     }
@@ -827,7 +902,8 @@ static void apply_vfx_overrides(Il2CppObject* camera_data) {
     if (!post_processing_enabled) {
         FieldInfo* enabled_field = current && current->klass ?
             find_vfx_field(current->klass, "IsEnable") : NULL;
-        if (!enabled_field) {
+        const Il2CppType* master_type = enabled_field ? il2cpp_field_get_type(enabled_field) : NULL;
+        if (!master_type || il2cpp_type_get_type(master_type) != 0x02 /* IL2CPP_TYPE_BOOLEAN */) {
             master_contract = FALSE;
         } else {
             uint8_t saved = 0;
@@ -845,11 +921,14 @@ static void apply_vfx_overrides(Il2CppObject* camera_data) {
             ++requested; \
             uint8_t zero[8] = {0}; \
             VfxFieldOverride* item = next_override < 32 ? &vfx_overrides[next_override++] : NULL; \
-            if (item && resolve_vfx_override(current, effect, field, size, type, item) && \
-                    write_vfx_value(item, zero)) { item->applied = TRUE; ++applied; } \
+            if (item && resolve_vfx_override(current, effect, field, size, type, item)) { \
+                if (!memcmp(item->saved_value,zero,size)) ++applied; \
+                else if (write_vfx_value(item,zero)) {item->applied=TRUE;++applied;} \
+            } \
             else if (item) memset(item, 0, sizeof(*item)); \
         } \
     } while (0)
+    if(post_processing_enabled){
     APPLY_ZERO(blur_effect_enabled, "BlurOptimized", "IsEnable", 1, 2);
     APPLY_ZERO(sun_shafts_effect_enabled, "SunShafts", "IsEnable", 1, 2);
     APPLY_ZERO(indirect_light_shafts_effect_enabled, "IndirectLightShafts", "IsEnable", 1, 2);
@@ -895,8 +974,9 @@ static void apply_vfx_overrides(Il2CppObject* camera_data) {
         APPLY_ZERO(FALSE, "GlobalFog", "IsHeightFog", 1, 2);
     }
 #undef APPLY_ZERO
+    }
     char detail[384];
-    snprintf(detail, sizeof(detail),
+    telemetry_snprintf(detail, sizeof(detail),
         "\"status\":\"%s\",\"post_processing_enabled\":%s,"
         "\"master_contract\":%s,\"requested_field_count\":%u,"
         "\"applied_field_count\":%u,\"failed_field_count\":%u,"
@@ -904,7 +984,7 @@ static void apply_vfx_overrides(Il2CppObject* camera_data) {
         (master_contract && requested == applied) ? "applied" : "partial_fail_open",
         post_processing_enabled ? "true" : "false", master_contract ? "true" : "false",
         requested, applied, requested - applied);
-    write_record("SETTINGS-008", "vfx_override_apply", detail);
+    if(vfx_log_change)write_record("SETTINGS-008", "vfx_override_apply", detail);
 }
 
 static BOOL blit_render_texture(Il2CppObject* source, Il2CppObject* destination) {
@@ -938,10 +1018,11 @@ static void reject_home_cycle_locked(const char* reason) {
     home_eye_completion_mask = 0;
     LONG event = InterlockedIncrement(&home_pair_events);
     if (event <= 8) {
-        char detail[192];
-        snprintf(detail, sizeof(detail),
+        char detail[192], escaped_reason[128];
+        json_escape(reason ? reason : "unknown", escaped_reason, sizeof(escaped_reason));
+        telemetry_snprintf(detail, sizeof(detail),
             "\"status\":\"panel\",\"reason\":\"%s\","
-            "\"recovery\":\"new_center_pair\"", reason ? reason : "unknown");
+            "\"recovery\":\"new_center_pair\"", escaped_reason);
         write_record("STEREO-011", "home_temporal_cycle_rejected", detail);
     }
 }
@@ -1093,7 +1174,7 @@ static void hooked_home_on_render(Il2CppObject* self, Il2CppObject* source,
         LONG event = InterlockedIncrement(&home_pair_events);
         if (event <= 8) {
             char detail[192];
-            snprintf(detail, sizeof(detail),
+            telemetry_snprintf(detail, sizeof(detail),
                 "\"status\":\"complete\",\"generation\":%ld,\"phase_order\":\"CENTER_LEFT_RIGHT\","
                 "\"pc_center_restored\":true", (long)generation);
             write_record("STEREO-011", "home_temporal_pair_complete", detail);
@@ -1110,6 +1191,9 @@ static void invalidate_eye_source_locked(const char* reason) {
        still current so fail-open never strands an eye pose on the PC camera. */
     restore_home_camera_snapshot();
     restore_vfx_overrides();
+    if(current_owner_kind==AUTHORED_OWNER_LIVE && current_authored_generation>0)
+        InterlockedExchange(&live_retired_through,current_authored_generation);
+    current_authored_generation=0;
     LONG old_generation = InterlockedExchange(&published_eye_generation, 0);
     InterlockedExchange(&published_flat_generation, 0);
     InterlockedExchange(&eye_pair_capture_ready, 0);
@@ -1128,14 +1212,20 @@ static void invalidate_eye_source_locked(const char* reason) {
     home_active_generation = 0;
     home_eye_completion_mask = 0;
     if (old_generation) {
-        char detail[256];
-        snprintf(detail, sizeof(detail), "\"status\":\"retired\",\"generation\":%ld,\"reason\":\"%s\"",
-            (long)old_generation, reason ? reason : "unknown");
+        char detail[256], escaped_reason[192];
+        json_escape(reason ? reason : "unknown", escaped_reason, sizeof(escaped_reason));
+        telemetry_snprintf(detail, sizeof(detail), "\"status\":\"retired\",\"generation\":%ld,\"reason\":\"%s\"",
+            (long)old_generation, escaped_reason);
         write_record("IMMERSIVE-SOURCE", "source_generation_retired", detail);
     }
 }
 
+#include "live_render_scale.h"
+
+static void contact_retire_live(void);
 static void destroy_eye_unity_objects(void) {
+    if(current_owner_kind==AUTHORED_OWNER_LIVE)contact_retire_live();
+    if(live_vfx_camera_root){request_dispatch_api.gchandle_free(live_vfx_camera_root);live_vfx_camera_root=0;}
     AcquireSRWLockExclusive(&eye_source_lock);
     invalidate_eye_source_locked("owner_or_scene_changed");
     ReleaseSRWLockExclusive(&eye_source_lock);
@@ -1144,6 +1234,7 @@ static void destroy_eye_unity_objects(void) {
         if (destroy && eye_render_texture[eye]) destroy(eye_render_texture[eye], mi_object_destroy);
         eye_render_texture[eye] = NULL;
     }
+    for (unsigned i=0;i<2;++i) scale_free(&scale_targets[i]);
     if (destroy && flat_render_texture) destroy(flat_render_texture, mi_object_destroy);
     flat_render_texture = NULL;
     flat_render_width = 0;
@@ -1165,6 +1256,8 @@ static BOOL render_authored_eye_pair(Il2CppObject* owner) {
     Il2CppObject* saved_target = camera_get_target(owner);
     float saved_aspect = camera_get_aspect(owner);
     float saved_near_clip = camera_get_near_clip(owner);
+    float eye_near_clip = saved_near_clip;
+    BOOL restore_near_clip = FALSE;
     float saved_far_clip = camera_get_far_clip(owner);
     Vec3 saved_position;
     Quat saved_rotation;
@@ -1185,10 +1278,22 @@ static BOOL render_authored_eye_pair(Il2CppObject* owner) {
         !isfinite(saved_far_clip) || saved_near_clip <= 0.0f ||
         saved_far_clip <= saved_near_clip || !authored_pose_anchor_valid) goto restore;
 
-    const Vec3* base_position = live_camera_follow ? &saved_position : &authored_pose_anchor_position;
-    const Quat* base_rotation = live_camera_follow ? &saved_rotation : &authored_pose_anchor_rotation;
+    LONG token=InterlockedCompareExchange(&camera_follow_token,0,0);
+    BOOL follow_current=token ? !(token&1) : live_camera_follow;
+    BOOL reset=current_authored_generation>0 && InterlockedCompareExchange(&return_camera_generation,0,current_authored_generation)==current_authored_generation;
+    if(reset){
+        authored_pose_anchor_position=saved_position;
+        authored_pose_anchor_rotation=saved_rotation;
+        live_follow_anchor.token=0;
+    }
+    InterlockedExchange(&follow_display_state,follow_current);
+    Vec3 effective_position=(token || follow_current)?saved_position:authored_pose_anchor_position;
+    Quat effective_rotation=(token || follow_current)?saved_rotation:authored_pose_anchor_rotation;
+    apply_camera_anchor(&live_follow_anchor,token,current_scene_handle,&effective_position,&effective_rotation);
+    const Vec3* base_position=&effective_position;
+    const Quat* base_rotation=&effective_rotation;
     float navigation_base_yaw = 0.0f, navigation_base_pitch = 0.0f;
-    if (live_camera_follow)
+    if (follow_current)
         quat_to_yaw_pitch_roll(*base_rotation, &navigation_base_yaw,
             &navigation_base_pitch, NULL);
     AcquireSRWLockExclusive(&eye_optics_lock);
@@ -1196,28 +1301,66 @@ static BOOL render_authored_eye_pair(Il2CppObject* owner) {
     eye_optics.navigation_base_pitch = navigation_base_pitch;
     ReleaseSRWLockExclusive(&eye_optics_lock);
 
+    if(live_vfx_camera_root){
+        static LONG last_mask=-1,last_generation=-1;
+        LONG mask=InterlockedCompareExchange(&live_vfx_mask,0,0);
+        vfx_log_change=mask!=last_mask || last_generation!=current_authored_generation;
+        if(vfx_log_change){
+            for(unsigned i=0;i<VFX_COUNT;i++)if(live_vfx_options[i].game_value)
+                *live_vfx_options[i].game_value=(mask&(1L<<i))!=0;
+            last_mask=mask;last_generation=current_authored_generation;
+        }
+        Il2CppObject* camera_data=request_dispatch_api.gchandle_get_target(live_vfx_camera_root);
+        apply_vfx_overrides(camera_data);
+    }
+    LONG percent = InterlockedCompareExchange(&scale_requested,0,0);
+    Il2CppObject* scaled = scale_target(percent);
+    rendered_percent = scaled ? percent : scale_native;
+    Vec3 contact_eyes[2];
+    Quat contact_rotation;
+    if (mi_camera_set_near_clip && mi_camera_set_near_clip->methodPointer &&
+        isfinite(world_scale) && world_scale > 0.0f) {
+        float limit = 0.001f / world_scale;
+        if (limit > 0.0f && limit < saved_near_clip) {
+            restore_near_clip = TRUE;
+            ((set_float_fn)mi_camera_set_near_clip->methodPointer)(owner, limit, mi_camera_set_near_clip);
+            eye_near_clip = camera_get_near_clip(owner);
+            if (!isfinite(eye_near_clip) || eye_near_clip <= 0.0f || eye_near_clip >= saved_far_clip)
+                goto restore;
+        }
+    }
     for (int eye = 0; eye < 2; ++eye) {
         if (!eye_render_texture[eye] || !eye_native_game[eye]) goto restore;
         Vec3 eye_position;
         Quat eye_rotation;
         Matrix4x4 eye_projection;
-        if (!compose_unity_eye_pose(base_position, base_rotation, live_camera_follow,
+        if (!compose_unity_eye_pose(base_position, base_rotation, follow_current,
                 &optics, world_scale, eye, &eye_position, &eye_rotation)) goto restore;
+        contact_eyes[eye]=eye_position;
+        contact_rotation=eye_rotation;
         /* Keep projection depth exactly aligned with Camera clip properties.
            Authored DoF and other depth reconstruction read those properties;
            a hard-coded projection range makes otherwise valid effects blur. */
-        build_unity_eye_projection(&optics.fov[eye], saved_near_clip,
+        build_unity_eye_projection(&optics.fov[eye], eye_near_clip,
             saved_far_clip, &eye_projection);
-        set_target(owner, eye_render_texture[eye], mi_camera_set_target);
+        set_target(owner, scaled ? scaled : eye_render_texture[eye], mi_camera_set_target);
         set_aspect(owner, (float)width / (float)height, mi_camera_set_aspect);
         transform_set_position(transform, &eye_position);
         transform_set_rotation(transform, &eye_rotation);
         camera_set_projection_matrix(owner, &eye_projection);
         render(owner, mi_camera_render);
+        if (scaled && !scale_copy(scaled,eye_render_texture[eye])) goto restore;
     }
+    live_contact_view.center=(Vec3){(contact_eyes[0].x+contact_eyes[1].x)*.5f,
+        (contact_eyes[0].y+contact_eyes[1].y)*.5f,(contact_eyes[0].z+contact_eyes[1].z)*.5f};
+    live_contact_view.rotation=contact_rotation;
+    live_contact_view.optics=optics;
     rendered = TRUE;
 
 restore:
+    if (restore_near_clip)
+        ((set_float_fn)mi_camera_set_near_clip->methodPointer)(owner, saved_near_clip, mi_camera_set_near_clip);
+    if(live_vfx_camera_root)restore_vfx_overrides();
     set_target(owner, saved_target, mi_camera_set_target);
     set_aspect(owner, saved_aspect, mi_camera_set_aspect);
     transform_set_position(transform, &saved_position);
@@ -1272,7 +1415,7 @@ static BOOL create_eye_unity_objects(Il2CppObject* owner, int32_t scene_handle,
     const char* context = owner_kind == AUTHORED_OWNER_HOME ? "Home" : "Live";
     if ((authored_mask & required_mask) != required_mask) {
         char extra[160];
-        snprintf(extra, sizeof(extra),
+        telemetry_snprintf(extra, sizeof(extra),
             "\"context\":\"%s\",\"component_mask\":\"0x%03x\",\"required_mask\":\"0x%03x\"",
             context, authored_mask, required_mask);
         write_disabled("authored_owner_component_contract", extra);
@@ -1285,15 +1428,18 @@ static BOOL create_eye_unity_objects(Il2CppObject* owner, int32_t scene_handle,
         write_disabled("home_engine_callback_contract", NULL);
         return FALSE;
     }
-    apply_vfx_overrides(camera_data);
+    if(owner_kind==AUTHORED_OWNER_LIVE && request_dispatch_api.gchandle_new &&
+       request_dispatch_api.gchandle_get_target && request_dispatch_api.gchandle_free)
+        live_vfx_camera_root=request_dispatch_api.gchandle_new(camera_data,false);
 
     for (int eye = 0; eye < 2; ++eye) {
         eye_render_texture[eye] = il2cpp_object_new(rendertexture_class);
         if (!eye_render_texture[eye]) goto fail;
         rt_ctor(eye_render_texture[eye], width, height, 24, 0, mi_rt_ctor);
         if (!rt_create(eye_render_texture[eye], mi_rt_create)) goto fail;
-        eye_native_game[eye] = (ID3D11Texture2D*)get_native_texture(eye_render_texture[eye]);
-        if (!eye_native_game[eye]) goto fail;
+        ID3D11Texture2D* native = (ID3D11Texture2D*)get_native_texture(eye_render_texture[eye]);
+        if (!native) goto fail;
+        InterlockedExchangePointer((volatile PVOID*)&eye_native_game[eye],native);
     }
     AcquireSRWLockExclusive(&eye_optics_lock);
     if (!immersive_entry_origin_committed &&
@@ -1309,18 +1455,23 @@ static BOOL create_eye_unity_objects(Il2CppObject* owner, int32_t scene_handle,
     } else {
         InterlockedExchange(&eye_pair_capture_ready, 0);
     }
+    /* Publish the completed source/token together. Unity calls above remain
+       outside this lock; Present sees NONE until this exclusive commit. */
+    AcquireSRWLockExclusive(&eye_source_lock);
     current_authored_owner = owner;
     current_owner_kind = owner_kind;
     current_home_controller = owner_kind == AUTHORED_OWNER_HOME ? home_controller : NULL;
     current_scene_handle = scene_handle;
     LONG generation = InterlockedIncrement(&source_generation);
+    current_authored_generation=generation;
     if (owner_kind == AUTHORED_OWNER_LIVE)
         InterlockedExchange64(&source_ready_after_present,
             InterlockedCompareExchange64((volatile LONG64*)&produced_frames, 0, 0) + 2);
     else
         InterlockedExchange64(&source_ready_after_present, INT64_MAX);
-    char detail[384];
-    snprintf(detail, sizeof(detail),
+    ReleaseSRWLockExclusive(&eye_source_lock);
+    char detail[1024];
+    telemetry_snprintf(detail, sizeof(detail),
         "\"status\":\"created\",\"generation\":%ld,\"scene_handle\":%d,"
         "\"context\":\"%s\",\"owner_contract\":\"%s\","
         "\"width\":%ld,\"height\":%ld,\"flat_width\":%ld,\"flat_height\":%ld,"
@@ -1352,11 +1503,62 @@ fail:
     return FALSE;
 }
 
+static void bp_main_step(Scene scene,BpSourceKind kind);
+static bool story_layer_trial(Scene scene);
+static BOOL contact_enabled=TRUE;
+static BOOL contact_motion=TRUE;
+static float contact_strength=100.0f;
+static float contact_tilt=100.0f;
+static float contact_duration=1.0f;
+static float contact_reach=100.0f;
+static float hand_radius_mm=13.f, contact_hold_ms=100.f;
+static BOOL contact_haptics=TRUE;
+static float haptic_strength=22.0f;
+static float haptic_duration=35.0f;
+static BOOL contact_consent; /* Set once during startup, before hooks start. */
+static void contact_scene_step(Scene scene,bool live);
+static volatile LONG scene_hook_calls, scene_updates, scene_home_updates;
+static volatile LONG scene_owner_updates, scene_owner_home_updates, scene_owner_tid;
 static void update_authored_source(Scene scene) {
     Il2CppString* scene_name = scene_get_name ? scene_get_name(scene.handle) : NULL;
     BOOL live_scene = il2cpp_string_equals_ascii(scene_name, "Live");
     BOOL home_scene = il2cpp_string_equals_ascii(scene_name, "Home");
+    BOOL story_scene = il2cpp_string_equals_ascii(scene_name, "Story");
+    BOOL owner_thread = GetCurrentThreadId() == (DWORD)InterlockedCompareExchange(&scene_owner_tid,0,0);
+    InterlockedIncrement(&scene_updates);
+    if (owner_thread) {
+        static int32_t logged_scene=INT32_MIN;
+        if(scene.handle!=logged_scene && scene_name){
+            logged_scene=scene.handle;
+            char name[64]={0},detail[150];
+            for(int i=0;i<scene_name->length && i<(int)sizeof(name)-1;i++){
+                unsigned c=scene_name->chars[i];
+                name[i]=(c>=32 && c<127 && c!=34 && c!=92)?(char)c:'_';
+            }
+            telemetry_snprintf(detail,sizeof detail,"\"stage\":\"scene_%s\",\"scene_handle\":%d",name,scene.handle);
+            write_record("MS-IM-508","owned_context_transition",detail);
+        }
+        LONG default_on=!live_scene || live_camera_follow;
+        if(camera_follow_default_on!=default_on)InterlockedExchange(&camera_follow_default_on,default_on);
+        InterlockedIncrement(&scene_owner_updates);
+    }
     if (home_scene) {
+        InterlockedIncrement(&scene_home_updates);
+        if (owner_thread) InterlockedIncrement(&scene_owner_home_updates);
+    }
+    /* The Story component signature also matches a background-only eye path.
+       Keep the composite visible during the private draw observation. */
+    BOOL race_scene = il2cpp_string_equals_ascii(scene_name, "Race");
+    BpSourceKind route=BP_SOURCE_NONE;
+    if (race_scene) route=BP_SOURCE_RACE;
+    else if (home_scene) route=BP_SOURCE_HOME;
+    else if (il2cpp_string_equals_ascii(scene_name,"OutGame")) route=BP_SOURCE_DRESS;
+    else if (story_scene && story_layer_trial(scene)) route=BP_SOURCE_STORY;
+    bp_main_step(scene,route);
+
+    if (!live_scene) contact_scene_step(scene,false);
+    else if (!current_authored_owner) contact_scene_step(scene,true);
+    if (home_scene || story_scene) {
         if (current_authored_owner) destroy_eye_unity_objects();
         return;
     }
@@ -1395,22 +1597,12 @@ static void update_authored_source(Scene scene) {
         if (!render_authored_eye_pair(owner)) {
             destroy_eye_unity_objects();
         } else {
-            InterlockedIncrement64(&eye_source_pair_serial);
+            contact_scene_step(scene,true);
+            LONG64 serial = InterlockedIncrement64(&eye_source_pair_serial);
+            InterlockedExchange64(&scale_frame_stamp,(serial<<8)|rendered_percent);
             InterlockedExchange(&eye_pair_capture_ready, 1);
         }
     }
-}
-
-static Scene hooked_get_active_scene(void) {
-    Scene scene = original_get_active_scene();
-    ULONGLONG now = GetTickCount64();
-    if (InterlockedCompareExchange(&unity_adapter_ready, 0, 0) &&
-        InterlockedCompareExchange(&eye_render_in_progress, 0, 0) == 0 &&
-        now - last_source_update_tick >= 16) {
-        last_source_update_tick = now;
-        update_authored_source(scene);
-    }
-    return scene;
 }
 
 static const Il2CppImage* find_image(const Il2CppAssembly** assemblies, size_t count,
@@ -1437,6 +1629,165 @@ static HANDLE unity_readiness_event;
 static volatile LONG unity_readiness_state;
 static volatile LONG unity_readiness_worker_abandoned;
 
+#include "base_producer.h"
+#include "home_hand_contact.h"
+
+/* An intermediate camera may live in the character's additive scene and its
+   texture may be composited again. Verify the visible body in camera space.
+   Cache only numeric renderer IDs, and resolve/validate them every sample. */
+static Il2CppObject* preview_model_camera(Il2CppArray* cameras,Scene scene,int32_t* source_mask,const char** result){
+    static Il2CppClass* skin;
+    static const MethodInfo *viewport,*layer_get,*mesh_get;
+    static Il2CppObject* (*resolve)(int32_t);
+    static bool bound;
+    if(!bound){
+        bound=true;contact_bind_native();
+        skin=p_class_from_name(story_geometry_core,"UnityEngine","SkinnedMeshRenderer");
+        Il2CppClass* mesh=p_class_from_name(story_geometry_core,"UnityEngine","Mesh");
+        if(skin && mesh)mesh_get=geometry_method(skin,"get_sharedMesh",mesh,NULL);
+        viewport=geometry_method(bp.types[BT_CAMERA],"WorldToViewportPoint",bp.types[BT_V3],bp.types[BT_V3]);
+        layer_get=geometry_method(bp.types[BT_GO],"get_layer",bp.types[BT_INT],NULL);
+        resolve=(void*)p_resolve_icall("UnityEngine.Object::FindObjectFromInstanceID(System.Int32)");
+    }
+    *result="preview_model_contract_unavailable";
+    if(!skin || !resolve || !viewport || !layer_get || !contact_native.bounds ||
+       !contact_native.visible || !contact_native.name || !cameras)return NULL;
+    static int32_t body_ids[16],cached_scene,cached_host;
+    static size_t count;
+    static ULONGLONG refresh;
+    ULONGLONG now=GetTickCount64();
+    if(now>=refresh || cached_scene!=scene.handle || cached_host!=dress_host_id){
+        cached_scene=scene.handle;cached_host=dress_host_id;refresh=now+300;count=0;
+        Il2CppReflectionType* type=p_type_get_object(p_class_get_type(skin));
+        Il2CppArray* bodies=type?unity_find_objects(type,0,0):NULL;
+        if(!bodies || bodies->max_length>512){*result="preview_model_list_unavailable";return NULL;}
+        for(uintptr_t i=0;i<bodies->max_length;i++){
+            Il2CppObject* body=bodies->vector[i];
+            if(!body)continue;
+            Il2CppObject* go=component_get_game_object(body);
+            if(contact_part_name(go,NULL)!=1){
+                Il2CppException* exc=NULL;
+                Il2CppObject* mesh=mesh_get?bp.api.runtime_invoke(mesh_get,body,NULL,&exc):NULL;
+                if(exc || contact_part_name(mesh,NULL)!=1)continue;
+            }
+            if(count==16){count=0;*result="preview_model_limit";return NULL;}
+            int32_t id=dress_instance(body);if(id)body_ids[count++]=id;
+        }
+    }
+    Il2CppObject* body=NULL;
+    *result="preview_visible_body_missing";
+    for(size_t i=0;i<count;i++){
+        Il2CppObject* value=resolve(body_ids[i]);
+        if(!value || !bp.api.class_is_assignable_from(skin,bp.api.object_get_class(value)) ||
+           !contact_native.visible(value))continue;
+        if(body){*result="preview_visible_body_ambiguous";return NULL;}
+        body=value;
+    }
+    if(!body)return NULL;
+    ContactBounds bounds={0};contact_native.bounds(body,&bounds);
+    Il2CppObject* go=component_get_game_object(body);int32_t layer=-1;
+    *result="preview_body_bounds_unavailable";
+    if(!go || !geometry_read(layer_get,go,NULL,bp.types[BT_INT],&layer,sizeof layer) ||
+       layer<0 || layer>=32 || !isfinite(bounds.center.x) || !isfinite(bounds.center.y) ||
+       !isfinite(bounds.center.z) || !(bounds.extent.y>0))return NULL;
+    Il2CppObject* eyes[2]={NULL,NULL};
+    for(unsigned i=0;i<2;i++)if(bp.eye[i].camera)eyes[i]=bp.api.gchandle_get_target(bp.eye[i].camera);
+    Il2CppObject* selected=NULL;
+    *result="preview_body_camera_missing";
+    for(uintptr_t i=0;i<cameras->max_length;i++){
+        Il2CppObject* camera=cameras->vector[i];uint8_t enabled=0,ortho=1;int32_t mask=0;
+        if(!camera || camera==eyes[0] || camera==eyes[1])continue;
+        if(!geometry_read(gacha_enabled,camera,NULL,bp.types[BT_BOOL],&enabled,1) || !enabled ||
+           !geometry_read(bp.method[BM_ORTHO],camera,NULL,bp.types[BT_BOOL],&ortho,1) || ortho ||
+           !geometry_read(bp.method[BM_CULL_GET],camera,NULL,bp.types[BT_INT],&mask,sizeof mask) ||
+           !((uint32_t)mask&(1u<<layer)))continue;
+        Vec3 point={0};float near_clip=0,far_clip=0;
+        if(!geometry_read(viewport,camera,(void*[]){&bounds.center},bp.types[BT_V3],&point,sizeof point) ||
+           !geometry_read(bp.method[BM_NEAR_GET],camera,NULL,bp.types[BT_FLOAT],&near_clip,sizeof near_clip) ||
+           !geometry_read(bp.method[BM_FAR_GET],camera,NULL,bp.types[BT_FLOAT],&far_clip,sizeof far_clip) ||
+           !(point.x>=0 && point.x<=1 && point.y>=0 && point.y<=1 && point.z>near_clip && point.z<far_clip))continue;
+        if(selected){*result="preview_body_camera_ambiguous";return NULL;}
+        selected=camera;*source_mask=mask;
+    }
+    if(selected)*result="preview_body_camera_matched";
+    return selected;
+}
+
+
+static void initialize_end_frame_bridge(const Il2CppImage* core,const Il2CppImage* game,
+        const Il2CppImage* corlib) {
+    EfTypes t = {0};
+#define EF_TYPE(target,image,ns,name) t.target = image ? p_class_from_name(image,ns,name) : NULL
+    EF_TYPE(marshal,corlib,"System.Runtime.InteropServices","Marshal");
+    EF_TYPE(action,corlib,"System","Action"); EF_TYPE(intptr,corlib,"System","IntPtr");
+    EF_TYPE(type,corlib,"System","Type"); EF_TYPE(delegate,corlib,"System","Delegate");
+    EF_TYPE(int32,corlib,"System","Int32"); EF_TYPE(boolean,corlib,"System","Boolean");
+    EF_TYPE(mono_behaviour,core,"UnityEngine","MonoBehaviour");
+    EF_TYPE(behaviour,core,"UnityEngine","Behaviour"); EF_TYPE(unity_object,core,"UnityEngine","Object");
+    EF_TYPE(time,core,"UnityEngine","Time");
+    EF_TYPE(scheduler,game,"Gallop","MonoBehaviourExtension"); EF_TYPE(host,game,"Gallop","GameSystem");
+#undef EF_TYPE
+    /* Existing instance census only, no singleton/static-field read or host
+       construction. An absent/ambiguous active GameSystem disables registration. */
+    Il2CppReflectionType* host_type = t.host ? p_type_get_object(p_class_get_type(t.host)) : NULL;
+    Il2CppArray* hosts = host_type ? unity_find_objects(host_type, 0, 0) : NULL;
+    Il2CppObject* host = NULL; unsigned matches = 0;
+    uintptr_t count = hosts ? hosts->max_length : 0;
+    if (count <= 64) for (uintptr_t i = 0; i < count; ++i) {
+        Il2CppObject* candidate = hosts->vector[i];
+        if (candidate && request_dispatch_api.object_get_class &&
+            request_dispatch_api.object_get_class(candidate) == t.host) { host = candidate; ++matches; }
+    }
+    if (matches != 1) host = NULL;
+    EfStatus status = ef_start(&end_frame_bridge, &request_dispatch_api, &t, host, report_end_frame_callback);
+    char detail[640], exception[128], ns[128];
+    json_escape(end_frame_bridge.exception_name ? end_frame_bridge.exception_name : "none", exception, sizeof(exception));
+    json_escape(end_frame_bridge.exception_namespace ? end_frame_bridge.exception_namespace : "none", ns, sizeof(ns));
+    telemetry_snprintf(detail, sizeof(detail),
+        "\"status\":\"%s\",\"stage\":\"%s\",\"exception_type\":\"%s\",\"exception_namespace\":\"%s\","
+        "\"phase_verified\":false,\"entry_verified\":false,\"tokens_issued\":0,\"producer_called\":false,"
+        "\"process_lifetime_roots\":true,\"unload_supported\":false,\"module_pinned\":%s,\"module_pin_error\":%lu",
+        ef_status_name(status), end_frame_bridge.binding_stage ? end_frame_bridge.binding_stage : "unbound", exception, ns,
+        end_frame_bridge.module_pinned ? "true" : "false", (unsigned long)end_frame_bridge.module_pin_error);
+    write_record("IMMERSIVE-SOURCE", "scheduler_bridge_registration", detail);
+}
+
+/* Unity's ScriptRunDelayedTasks entry drains its own work before the mod runs.
+   The scene getter stays unmodified and no Unity work is queued on a window timer. */
+static void hooked_execute_tasks(const MethodInfo* method){
+    original_execute_tasks(method);
+    if(method!=frame_tasks_method ||
+       !InterlockedCompareExchange(&unity_adapter_ready,0,0) ||
+       GetCurrentThreadId()!=(DWORD)InterlockedCompareExchange(&scene_owner_tid,0,0) ||
+       InterlockedCompareExchange(&eye_render_in_progress,0,0))return;
+    static BOOL busy;
+    static int last_frame=-1;
+    if(busy)return;
+    busy=TRUE;
+    int frame=scene_frame_count();
+    ULONGLONG now=GetTickCount64();
+    if(frame>=0 && frame!=last_frame && now-last_source_update_tick>=16){
+        last_frame=frame;last_source_update_tick=now;
+        if(InterlockedIncrement(&scene_hook_calls)==1)
+            write_record("OWN-BASE","owned_context_transition","\"stage\":\"player_loop_scene_owner\"");
+        Scene scene=frame_get_active_scene(frame_scene_method);
+        update_authored_source(scene);
+    }
+    busy=FALSE;
+}
+
+static bool frame_tasks_signature(Il2CppClass* owner,const MethodInfo* m){
+    RdApi* a=&request_dispatch_api;
+    if(!m || !m->methodPointer || !a->method_get_flags || !a->method_get_class ||
+       !a->method_get_param_count || !a->method_is_generic || !a->method_is_inflated ||
+       !a->method_get_return_type || !a->type_get_type || !a->type_is_byref)return false;
+    uint32_t impl=0;
+    const Il2CppType* ret=a->method_get_return_type(m);
+    return a->method_get_class(m)==owner && a->method_get_param_count(m)==0 &&
+        (a->method_get_flags(m,&impl)&(0x10|0x400))==0x10 &&
+        !a->method_is_generic(m) && !a->method_is_inflated(m) && ret &&
+        !a->type_is_byref(ret) && a->type_get_type(ret)==0x01; /* IL2CPP_TYPE_VOID */
+}
 static void initialize_unity_adapter_on_attached_thread(void) {
     Il2CppDomain* domain = p_domain_get();
     size_t assembly_count = 0;
@@ -1452,6 +1803,32 @@ static void initialize_unity_adapter_on_attached_thread(void) {
     Il2CppClass* texture_class = core ? p_class_from_name(core, "UnityEngine", "Texture") : NULL;
     Il2CppClass* graphics_class = core ? p_class_from_name(core, "UnityEngine", "Graphics") : NULL;
     Il2CppClass* object_class = core ? p_class_from_name(core, "UnityEngine", "Object") : NULL;
+    {
+        const Il2CppImage* corlib = assemblies ? find_image(assemblies, assembly_count,
+            p_assembly_get_image, p_image_get_name, "mscorlib.dll") : NULL;
+        RdTypes types = {0};
+        types.camera = camera_class;
+        types.object = corlib ? p_class_from_name(corlib, "System", "Object") : NULL;
+        types.type = corlib ? p_class_from_name(corlib, "System", "Type") : NULL;
+        types.boolean = corlib ? p_class_from_name(corlib, "System", "Boolean") : NULL;
+        types.int32 = corlib ? p_class_from_name(corlib, "System", "Int32") : NULL;
+        types.method_info = corlib ? p_class_from_name(corlib, "System.Reflection", "MethodInfo") : NULL;
+        RdStatus status = rd_bind(&request_dispatch_binding, &request_dispatch_api, &types);
+        char detail[640], exception_name[128], exception_namespace[128];
+        json_escape(request_dispatch_binding.exception_name ? request_dispatch_binding.exception_name : "none",
+            exception_name, sizeof(exception_name));
+        json_escape(request_dispatch_binding.exception_namespace ? request_dispatch_binding.exception_namespace : "none",
+            exception_namespace, sizeof(exception_namespace));
+        telemetry_snprintf(detail, sizeof(detail),
+            "\"status\":\"%s\",\"route\":%u,\"stage\":\"%s\","
+            "\"request_executed\":false,\"renderer_support\":\"unverified\","
+            "\"gpu_complete\":false,\"eye_allocation_enabled\":false,"
+            "\"exception_namespace\":\"%s\",\"exception_type\":\"%s\"",
+            rd_status_name(status), (unsigned)request_dispatch_binding.route,
+            request_dispatch_binding.stage ? request_dispatch_binding.stage : "unbound",
+            exception_namespace, exception_name);
+        write_record("IMMERSIVE-SOURCE", "request_dispatch_binding", detail);
+    }
     Il2CppClass* home_controller_class = game_image ?
         p_class_from_name(game_image, "Gallop", "HomeCameraController") : NULL;
     Il2CppClass* home_image_effect_class = game_image ?
@@ -1472,9 +1849,12 @@ static void initialize_unity_adapter_on_attached_thread(void) {
         p_class_get_method(home_image_effect_class, "OnRender", 2) : NULL;
     mi_camera_set_target = camera_class ? p_class_get_method(camera_class, "set_targetTexture", 1) : NULL;
     mi_camera_set_aspect = camera_class ? p_class_get_method(camera_class, "set_aspect", 1) : NULL;
+    mi_camera_set_near_clip = camera_class ? p_class_get_method(camera_class, "set_nearClipPlane", 1) : NULL;
     mi_camera_render = camera_class ? p_class_get_method(camera_class, "Render", 0) : NULL;
     mi_rt_ctor = rendertexture_class ? p_class_get_method(rendertexture_class, ".ctor", 4) : NULL;
     mi_rt_create = rendertexture_class ? p_class_get_method(rendertexture_class, "Create", 0) : NULL;
+    contact_physics=assemblies?find_image(assemblies,assembly_count,p_assembly_get_image,p_image_get_name,"UnityEngine.PhysicsModule.dll"):NULL;
+    scale_bind(graphics_class,texture_class,rendertexture_class);
     mi_graphics_blit = graphics_class ? p_class_get_method(graphics_class, "Blit", 2) : NULL;
     get_native_texture = texture_class ? (native_texture_icall_fn)p_resolve_icall(
         "UnityEngine.Texture::GetNativeTexturePtr()") : NULL;
@@ -1508,7 +1888,7 @@ static void initialize_unity_adapter_on_attached_thread(void) {
             missing_mask |= (1u << (bit)); \
             size_t used = strlen(missing_names); \
             if (used < sizeof(missing_names) - 1) \
-                snprintf(missing_names + used, sizeof(missing_names) - used, \
+                telemetry_snprintf(missing_names + used, sizeof(missing_names) - used, \
                     "%s%s", used ? "," : "", label); \
         } \
     } while (0)
@@ -1542,22 +1922,43 @@ static void initialize_unity_adapter_on_attached_thread(void) {
 #undef CHECK_CONTRACT
     if (missing_mask) {
         char extra[416];
-        snprintf(extra, sizeof(extra), "\"missing_mask\":\"0x%08x\",\"missing\":\"%s\"",
+        telemetry_snprintf(extra, sizeof(extra), "\"missing_mask\":\"0x%08x\",\"missing\":\"%s\"",
             missing_mask, missing_names);
         write_disabled("unity_adapter_contract", extra);
         return;
     }
     MH_STATUS init = MH_Initialize();
     if (init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) { write_disabled("unity_minhook_initialize", NULL); return; }
-    if (MH_CreateHook((LPVOID)active->methodPointer, (LPVOID)hooked_get_active_scene,
-            (LPVOID*)&original_get_active_scene) != MH_OK ||
-        MH_EnableHook((LPVOID)active->methodPointer) != MH_OK) {
-        write_disabled("unity_scene_hook", NULL); return;
+    Il2CppClass* context=core?p_class_from_name(core,"UnityEngine","UnitySynchronizationContext"):NULL;
+    frame_tasks_method=context?p_class_get_method(context,"ExecuteTasks",0):NULL;
+    scene_frame_count=(void*)p_resolve_icall("UnityEngine.Time::get_frameCount()");
+    if(!frame_tasks_signature(context,frame_tasks_method) || !scene_frame_count){
+        write_disabled("unity_frame_tasks_contract",NULL);return;
+    }
+    frame_get_active_scene=(get_active_scene_fn)active->methodPointer;
+    frame_scene_method=active;
+    HMODULE pinned=NULL;
+    if(!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_PIN,
+           (LPCWSTR)(void*)hooked_execute_tasks,&pinned) ||
+       MH_CreateHook((LPVOID)frame_tasks_method->methodPointer,(LPVOID)hooked_execute_tasks,
+           (LPVOID*)&original_execute_tasks)!=MH_OK ||
+       MH_EnableHook((LPVOID)frame_tasks_method->methodPointer)!=MH_OK){
+        write_disabled("unity_frame_tasks_hook",NULL);return;
     }
     /* FAIL-036: the metadata-selected OnRender native pointer is shared with
        unrelated IL2CPP call sites, so it cannot be hooked as an object method.
        Keep Home on the complete PANEL until a distinct completed-output owner
        supplies an instance-safe callback/lifetime contract. */
+    const Il2CppImage* callback_corlib = assemblies ? find_image(assemblies, assembly_count,
+        p_assembly_get_image, p_image_get_name, "mscorlib.dll") : NULL;
+    const Il2CppImage* owned_urp = assemblies ? find_image(assemblies, assembly_count,
+        p_assembly_get_image, p_image_get_name, "Unity.RenderPipelines.Universal.Runtime.dll") : NULL;
+    InterlockedExchange(&scene_owner_tid,(LONG)GetCurrentThreadId());
+    const Il2CppImage* ui = assemblies ? find_image(assemblies, assembly_count,
+        p_assembly_get_image, p_image_get_name, "UnityEngine.UI.dll") : NULL;
+    bp_bind(core,game_image,callback_corlib,owned_urp);
+    if (bp.bound && ui) bind_dress_ui(ui);
+    initialize_end_frame_bridge(core, game_image, callback_corlib);
     BOOL home_contract = FALSE;
     if (home_contract &&
         MH_CreateHook((LPVOID)home_late_update->methodPointer,
@@ -1643,6 +2044,9 @@ static DWORD WINAPI unity_adapter_worker(LPVOID unused) {
     LOAD_EXPORT(il2cpp_object_new, object_new_fn, "il2cpp_object_new");
     LOAD_EXPORT(p_resolve_icall, resolve_icall_fn, "il2cpp_resolve_icall");
     LOAD_EXPORT(p_thread_current, thread_current_fn, "il2cpp_thread_current");
+#define RD_LOAD(ret,name,args) request_dispatch_api.name = (ret (*) args)(void*)GetProcAddress(game,"il2cpp_" #name);
+    RD_API_LIST(RD_LOAD)
+#undef RD_LOAD
 #undef LOAD_EXPORT
     if (!p_domain_get || !p_domain_get_assemblies || !p_assembly_get_image || !p_image_get_name ||
         !p_class_from_name || !p_class_get_method || !il2cpp_class_get_name || !p_class_get_type ||
@@ -1778,7 +2182,7 @@ static BOOL ensure_shared_eye_pair(ID3D11Texture2D* source[2]) {
         return FALSE;
     }
     char detail[320];
-    snprintf(detail, sizeof(detail),
+    telemetry_snprintf(detail, sizeof(detail),
         "\"status\":\"observed\",\"width\":%u,\"height\":%u,\"format\":%u,"
         "\"pair_atomic\":true,\"sync\":\"keyed_mutex\"",
         shared_desc.Width, shared_desc.Height, (unsigned)shared_desc.Format);
@@ -1832,7 +2236,7 @@ static BOOL ensure_shared_flat_source(ID3D11Texture2D* source) {
         return FALSE;
     }
     char detail[256];
-    snprintf(detail, sizeof(detail),
+    telemetry_snprintf(detail, sizeof(detail),
         "\"status\":\"observed\",\"width\":%u,\"height\":%u,\"format\":%u,"
         "\"generation_tokened\":true,\"sync\":\"keyed_mutex\"",
         desc.Width, desc.Height, (unsigned)desc.Format);
@@ -1899,7 +2303,7 @@ static BOOL rebuild_shared_texture(ID3D11Texture2D* bb) {
     HANDLE replacement_handle = NULL;
     HRESULT hr = ID3D11Device_CreateTexture2D(device, &sd, NULL, &replacement_tex);
     if (FAILED(hr) || !replacement_tex) {
-        snprintf(detail, sizeof(detail), "\"create_hr\":%ld,\"km_enabled\":%ld",
+        telemetry_snprintf(detail, sizeof(detail), "\"create_hr\":%ld,\"km_enabled\":%ld",
             (long)hr, (long)km_enabled);
         write_disabled("capture_shared_texture_create", detail);
         ID3D11Device_Release(device);
@@ -1913,12 +2317,12 @@ static BOOL rebuild_shared_texture(ID3D11Texture2D* bb) {
             sd.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
             hr = ID3D11Device_CreateTexture2D(device, &sd, NULL, &replacement_tex);
             if (FAILED(hr) || !replacement_tex) {
-                snprintf(detail, sizeof(detail), "\"create_hr_fallback\":%ld", (long)hr);
+                telemetry_snprintf(detail, sizeof(detail), "\"create_hr_fallback\":%ld", (long)hr);
                 write_disabled("capture_shared_texture_create", detail);
                 ID3D11Device_Release(device);
                 return FALSE;
             }
-            snprintf(detail, sizeof(detail),
+            telemetry_snprintf(detail, sizeof(detail),
                 "\"status\":\"observed\",\"sync_mode\":\"none\",\"note\":\"keyed_mutex_unavailable\"");
             write_record("CAP-009", "shared_sync_fallback", detail);
         }
@@ -1929,7 +2333,7 @@ static BOOL rebuild_shared_texture(ID3D11Texture2D* bb) {
         hr = IDXGIResource_GetSharedHandle(res, &replacement_handle);
         IDXGIResource_Release(res);
         if (FAILED(hr) || !replacement_handle) {
-            snprintf(detail, sizeof(detail), "\"get_shared_handle_hr\":%ld", (long)hr);
+            telemetry_snprintf(detail, sizeof(detail), "\"get_shared_handle_hr\":%ld", (long)hr);
             write_disabled("capture_shared_handle", detail);
             if (replacement_km) IDXGIKeyedMutex_Release(replacement_km);
             ID3D11Texture2D_Release(replacement_tex);
@@ -1937,7 +2341,7 @@ static BOOL rebuild_shared_texture(ID3D11Texture2D* bb) {
             return FALSE;
         }
     } else {
-        snprintf(detail, sizeof(detail), "\"resource_qi_hr\":%ld", (long)hr);
+        telemetry_snprintf(detail, sizeof(detail), "\"resource_qi_hr\":%ld", (long)hr);
         write_disabled("capture_resource_query", detail);
         if (replacement_km) IDXGIKeyedMutex_Release(replacement_km);
         ID3D11Texture2D_Release(replacement_tex);
@@ -1957,13 +2361,16 @@ static BOOL rebuild_shared_texture(ID3D11Texture2D* bb) {
     InterlockedExchange(&requested_flat_height, (LONG)bb_height);
     if (retired_km) IDXGIKeyedMutex_Release(retired_km);
     if (retired_tex) ID3D11Texture2D_Release(retired_tex);
-    snprintf(detail, sizeof(detail),
+    telemetry_snprintf(detail, sizeof(detail),
         "\"status\":\"observed\",\"generation\":%ld,\"width\":%u,\"height\":%u,"
         "\"format\":%u,\"shared_handle_published\":true",
         (long)generation, bb_width, bb_height, (unsigned)sd.Format);
     write_record("CAP-009", "desktop_mirror_generation_created", detail);
     return TRUE;
 }
+
+
+#include "base_producer_gpu.h"
 
 static HRESULT STDMETHODCALLTYPE hooked_present(IDXGISwapChain* chain, UINT sync_interval, UINT flags) {
     if (!original_present) return E_FAIL;
@@ -1975,6 +2382,8 @@ static HRESULT STDMETHODCALLTYPE hooked_present(IDXGISwapChain* chain, UINT sync
         quick.OutputWindow != g_game_window ||
         !output_window_is_eligible(quick.OutputWindow))
         return original_present(chain, sync_interval, flags);
+
+    if(flags & DXGI_PRESENT_TEST)return original_present(chain,sync_interval,flags);
 
     ID3D11Texture2D* bb = NULL;
     if (FAILED(IDXGISwapChain_GetBuffer(chain, 0, &iid_d3d11_texture2d, (void**)&bb)) || !bb)
@@ -1996,8 +2405,8 @@ static HRESULT STDMETHODCALLTYPE hooked_present(IDXGISwapChain* chain, UINT sync
         BOOL copied = FALSE;
         /* Never wait on the game's Present thread. If the XR consumer owns
            the shared image, keep the previous complete frame (FAIL-005). */
-        if (!km_enabled || !shared_km_game ||
-            SUCCEEDED(IDXGIKeyedMutex_AcquireSync(shared_km_game, 0, 0))) {
+        if (!km_enabled || (shared_km_game &&
+            IDXGIKeyedMutex_AcquireSync(shared_km_game, 0, 0)==S_OK)) {
             ID3D11DeviceContext* ctx = NULL;
             ID3D11Device* dev = NULL;
             ID3D11Texture2D_GetDevice(bb, &dev);
@@ -2011,30 +2420,44 @@ static HRESULT STDMETHODCALLTYPE hooked_present(IDXGISwapChain* chain, UINT sync
                 }
                 ID3D11Device_Release(dev);
             }
-            if (km_enabled && shared_km_game) IDXGIKeyedMutex_ReleaseSync(shared_km_game, 1);
+            if (km_enabled && IDXGIKeyedMutex_ReleaseSync(shared_km_game, copied?1:0)!=S_OK)copied=FALSE;
         }
         if (copied) InterlockedIncrement64((volatile LONG64*)&produced_frames);
     }
+
+    bp_present(bb);
 
     /* Eye publication is all-or-nothing. Never wait on Present, and never
        expose a generation until both game-device copies completed under the
        same keyed-mutex ownership interval. */
     if (TryAcquireSRWLockShared(&eye_source_lock)) {
-        LONG generation = InterlockedCompareExchange(&source_generation, 0, 0);
+        /* Old authored textures keep their own token even if an owned build
+           allocated a new global generation before authored invalidation. */
+        LONG generation = current_authored_generation;
         LONG64 ready_after = InterlockedCompareExchange64(&source_ready_after_present, 0, 0);
         LONG64 source_serial = InterlockedCompareExchange64(&eye_source_pair_serial, 0, 0);
         ID3D11Texture2D* source[2] = {eye_native_game[0], eye_native_game[1]};
         ID3D11Texture2D* flat_source = flat_native_game;
-        if (generation > 0 && source[0] && source[1] && source_serial > 0 &&
+        /* The shared pair has ONE owner across OWN/LIVE. The short transport
+           interval never waits behind managed configuration or XR consumption. */
+        BOOL eye_transport_lock=TryAcquireSRWLockExclusive(&bp_lock);
+        if(eye_transport_lock) {
+        if (bp_transport_live_current(generation,InterlockedCompareExchange(&source_generation,0,0),
+            current_owner_kind==AUTHORED_OWNER_LIVE) &&
+            current_owner_kind==AUTHORED_OWNER_LIVE && source[0] && source[1] && source_serial > 0 &&
             source_serial != game_published_source_serial &&
+            !bp_transport_blocked(&bp_transport) && !bp_transport_pending(&bp_transport) &&
+            bp.c.query==BP_Q_NONE && !bp.c.mutex_owned &&
             InterlockedCompareExchange(&eye_pair_capture_ready, 0, 0) &&
             InterlockedCompareExchange64((volatile LONG64*)&produced_frames, 0, 0) >= ready_after &&
             ensure_shared_eye_pair(source)) {
-            BOOL left = SUCCEEDED(IDXGIKeyedMutex_AcquireSync(shared_eye_km_game[0], 0, 0));
-            BOOL right = left && SUCCEEDED(IDXGIKeyedMutex_AcquireSync(shared_eye_km_game[1], 0, 0));
-            if (left && right) {
+            HRESULT acquire_result[3];
+            int acquired=bp_keyed_pair_acquire(shared_eye_km_game[0],shared_eye_km_game[1],0,acquire_result);
+            if(acquired==BP_KM_BROKEN) bp_transport_quarantine(&bp_transport);
+            if (acquired==BP_KM_READY) {
                 ID3D11Device* eye_device = NULL;
                 ID3D11DeviceContext* eye_context = NULL;
+                LONG64 serial=0;
                 ID3D11Texture2D_GetDevice(source[0], &eye_device);
                 if (eye_device) ID3D11Device_GetImmediateContext(eye_device, &eye_context);
                 if (eye_context) {
@@ -2043,17 +2466,26 @@ static HRESULT STDMETHODCALLTYPE hooked_present(IDXGISwapChain* chain, UINT sync
                     ID3D11DeviceContext_CopyResource(eye_context,
                         (ID3D11Resource*)shared_eye_game[1], (ID3D11Resource*)source[1]);
                     ID3D11DeviceContext_Release(eye_context);
-                    InterlockedIncrement64(&eye_pair_serial);
+                    serial = InterlockedIncrement64(&eye_pair_serial);
+                    stereo_observe_cache(&game_pair_telemetry, generation, serial);
+                    LONG64 stamp=InterlockedCompareExchange64(&scale_frame_stamp,0,0);
+                    game_pair_telemetry.render_percent=(stamp>>8)==source_serial?(LONG)(stamp&255):0;
+                    if(!bp_transport_begin(&bp_transport,BP_TRANSPORT_LIVE,generation,serial)) {
+                        bp_transport_quarantine(&bp_transport);serial=0;
+                    }
+                }
+                if (eye_device) ID3D11Device_Release(eye_device);
+                HRESULT right=IDXGIKeyedMutex_ReleaseSync(shared_eye_km_game[1],serial?1:0);
+                HRESULT left=IDXGIKeyedMutex_ReleaseSync(shared_eye_km_game[0],serial?1:0);
+                if(right!=S_OK || left!=S_OK) bp_transport_quarantine(&bp_transport);
+                if(serial && !bp_transport_blocked(&bp_transport)) {
                     InterlockedExchange64(&eye_pair_tick, (LONG64)GetTickCount64());
                     InterlockedExchange(&published_eye_generation, generation);
                     game_published_source_serial = source_serial;
                 }
-                if (eye_device) ID3D11Device_Release(eye_device);
-                IDXGIKeyedMutex_ReleaseSync(shared_eye_km_game[1], 1);
-                IDXGIKeyedMutex_ReleaseSync(shared_eye_km_game[0], 1);
-            } else if (left) {
-                IDXGIKeyedMutex_ReleaseSync(shared_eye_km_game[0], 0);
             }
+        }
+        ReleaseSRWLockExclusive(&bp_lock);
         }
         /* The auxiliary monoscopic surface is optional for stereo and carries
            the same generation token.  A flat sharing failure must not regress
@@ -2135,7 +2567,7 @@ static DWORD WINAPI capture_worker(LPVOID unused) {
     HRESULT hardware_hr = discover_present_target(D3D_DRIVER_TYPE_HARDWARE, &present_target);
     if (!present_target) {
         char extra[128];
-        snprintf(extra, sizeof(extra), "\"hardware_hr\":%ld", (long)hardware_hr);
+        telemetry_snprintf(extra, sizeof(extra), "\"hardware_hr\":%ld", (long)hardware_hr);
         write_disabled("present_target_discovery", extra);
         return 0;
     }
@@ -2150,7 +2582,7 @@ static DWORD WINAPI capture_worker(LPVOID unused) {
     }
     InterlockedExchange(&capture_active, 1);
     char detail[256];
-    snprintf(detail, sizeof(detail),
+    telemetry_snprintf(detail, sizeof(detail),
         "\"status\":\"hook_enabled\",\"attach_to_capture_ms\":%lu",
         (unsigned long)(GetTickCount64() - attach_tick));
     write_record(PROBE_ID, "ready", detail);
@@ -2169,6 +2601,39 @@ static XrAction g_primary_face_action;
 static XrAction g_secondary_face_action;
 static XrAction g_panel_grip_pose_action;
 static XrAction g_panel_grip_value_action;
+static XrAction g_world_grip_pose, g_world_squeeze;
+static XrAction g_return_click, g_follow_click, g_contact_haptic, panel_haptic;
+typedef struct { XrTime pressed; BOOL armed; } ReturnButton;
+static ReturnButton g_return_button;
+static BOOL g_follow_armed;
+
+typedef enum { CAMERA_NONE, CAMERA_RETURN, CAMERA_RECENTER } CameraGesture;
+
+static CameraGesture camera_return_gesture(ReturnButton* button, BOOL active, BOOL down, XrTime now) {
+    if (!active) {
+        *button = (ReturnButton){0};
+        return CAMERA_NONE;
+    }
+    if (!down) {
+        BOOL short_press = button->pressed != 0;
+        *button = (ReturnButton){.armed=TRUE};
+        return short_press ? CAMERA_RETURN : CAMERA_NONE;
+    }
+    if (!button->armed) return CAMERA_NONE;
+    if (!button->pressed) button->pressed = now;
+    if (now - button->pressed < 800000000) return CAMERA_NONE;
+    *button = (ReturnButton){0};
+    return CAMERA_RECENTER;
+}
+static LONG g_click_generation;
+static XrSpace g_world_grip_space;
+typedef struct WorldGrab {
+    BOOL armed, holding;
+    LONG generation;
+    XrTime time;
+    XrVector3f position;
+} WorldGrab;
+static WorldGrab g_world_grab;
 static XrAction g_right_stick_action;
 static XrAction g_left_stick_action;
 static XrSpace g_aim_space;
@@ -2180,7 +2645,7 @@ static XrPath g_panel_hand_path;
 static BOOL g_controller_actions_configured;
 static BOOL g_controller_actions_ready;
 static BOOL g_aux_panel_visible;
-static BOOL g_panel_grip_was_down;
+static BOOL g_panel_grip_was_down, panel_short_armed;
 static BOOL g_primary_down;
 static BOOL g_back_was_down;
 static BOOL g_pointer_logged;
@@ -2215,7 +2680,46 @@ static LONG xr_flat_cache_generation;
 static UINT g_flat_width;
 static UINT g_flat_height;
 static LONG xr_eye_cache_generation;
+static StereoCacheTelemetry xr_cache_telemetry;
+static StereoTelemetry xr_frame_telemetry;
+static unsigned long long xr_observed_frame_id, stereo_end_accepted_total;
+typedef struct StereoCadence {
+    LONG generation, percent;
+    BOOL owned, sampled;
+    LONG64 serial, start, fresh_time, sum, longest;
+    unsigned long long fresh, reused, intervals;
+} StereoCadence;
+static StereoCadence cadence;
+static void cadence_report(const char* stage) {
+    if (!cadence.fresh) return;
+    char detail[384];
+    telemetry_snprintf(detail,sizeof detail,
+        "\"stage\":\"%s\",\"generation\":%ld,\"render_percent\":%ld,\"owned\":%s,"
+        "\"fresh_pairs\":%llu,\"reused_frames\":%llu,\"intervals\":%llu,"
+        "\"mean_fresh_ms\":%.3f,\"max_fresh_ms\":%.3f",
+        stage,cadence.generation,cadence.percent,cadence.owned?"true":"false",
+        cadence.fresh,cadence.reused,cadence.intervals,
+        cadence.intervals?(double)cadence.sum/(double)cadence.intervals/1e6:0.0,(double)cadence.longest/1e6);
+    write_record("PERF","stereo_cadence",detail);
+}
+static void cadence_step(BOOL accepted,LONG gen,LONG percent,BOOL owned,LONG64 serial,LONG64 time) {
+    if (!accepted || gen!=cadence.generation || percent!=cadence.percent || owned!=cadence.owned ||
+        time<=cadence.fresh_time || serial<cadence.serial) {
+        cadence_report("segment_end");cadence=(StereoCadence){0};
+    }
+    if(!accepted || gen<=0 || serial<=0 || time<=0) return;
+    if(!cadence.fresh){cadence.generation=gen;cadence.percent=percent;cadence.owned=owned;cadence.start=time;}
+    if(serial==cadence.serial)++cadence.reused;
+    else{
+        if(cadence.fresh){LONG64 gap=time-cadence.fresh_time;cadence.sum+=gap;++cadence.intervals;
+            if(gap>cadence.longest)cadence.longest=gap;}
+        ++cadence.fresh;cadence.serial=serial;cadence.fresh_time=time;
+    }
+    if(!cadence.sampled && time-cadence.start>=5000000000LL){cadence_report("five_seconds");cadence.sampled=TRUE;}
+}
+static long stereo_end_logged_generation;
 static LONG xr_active_source_generation;
+static ULONGLONG xr_live_cache_produced_tick; /* XR-owned timestamp of the copied Live pair */
 static unsigned long long immersive_frames_total;
 static uint32_t g_eye_width;
 static uint32_t g_eye_height;
@@ -2242,6 +2746,12 @@ static ID3DBlob* g_ps_blob;
 static ID3DBlob* g_panel_ps_blob;
 static ID3DBlob* g_vs_dbg_blob;
 static ID3DBlob* g_ps_solid_blob;
+static ID3DBlob *sphere_vs_blob,*sphere_ps_blob;
+static ID3D11VertexShader* sphere_vs;
+static ID3D11PixelShader* sphere_ps;
+static ID3DBlob* marker_blob;
+static ID3D11PixelShader* marker_ps;
+static BOOL show_hands=TRUE, show_contact=TRUE;
 static ID3DBlob* g_eye_copy_vs_blob;
 
 static ID3D11VertexShader* g_vs;
@@ -2264,6 +2774,7 @@ static HANDLE xr_desktop_mirror_handle;
 static UINT g_panel_width;
 static UINT g_panel_height;
 
+#include "home_panel_visibility.h"
 typedef struct PanelVertex {
     float x, y, z, u, v;
 } PanelVertex;
@@ -2279,9 +2790,8 @@ static const char* g_ps_src =
     "struct PSIn { float4 pos : SV_POSITION; float2 uv : TEXCOORD0; };"
     "float4 main(PSIn i) : SV_Target { float4 c = tex.Sample(samp, i.uv); c.a = 1.0; return c; }";
 
-/* The captured PC final composite is display-encoded UNORM. OpenXR's UNORM
-   projection image carries linear content, so only the flat-panel path applies
-   the exact sRGB EOTF. The accepted immersive eye-copy shader remains g_ps. */
+/* The PC composite and current own-Base RT bytes are display encoded. Their
+   UNORM XR paths use this exact EOTF; accepted authored Live retains g_ps. */
 static const char* g_panel_ps_src =
     "Texture2D tex : register(t0); SamplerState samp : register(s0);"
     "struct PSIn { float4 pos : SV_POSITION; float2 uv : TEXCOORD0; };"
@@ -2295,6 +2805,27 @@ static const char* g_vs_dbg_src =
     "struct PSIn { float4 pos : SV_POSITION; float2 uv : TEXCOORD0; };"
     "PSIn main(VSIn i) { PSIn o; o.pos = float4(i.pos.x * 0.25, i.pos.y * 0.25, 0.5, 1); o.uv = i.uv; return o; }";
 
+/* Generate 16 longitude by 12 latitude cells in object space. Project each
+   eye separately. The normal and light are in view space. */
+static const char* sphere_vertex_shader=
+    "cbuffer Sphere : register(b0){float4x4 mvp;};"
+    "struct V{float4 p:SV_Position;float3 n:TEXCOORD0;float facing:TEXCOORD1;};"
+    "V main(uint id:SV_VertexID){uint cell=id/6,k=id%6;"
+    "float u=(cell%16+(k==2||k==4||k==5))/16.;"
+    "float v=(cell/16+(k==1||k==3||k==4))/12.;"
+    "float a=u*6.2831853,b=v*3.14159265-1.5707963;"
+    "float3 n=float3(cos(b)*cos(a),sin(b),cos(b)*sin(a));"
+    "V o;o.n=n;o.p=mul(mvp,float4(n,1));"
+    "o.facing=n.z;return o;}";
+static const char* sphere_pixel_shader=
+    "float4 main(float4 p:SV_Position,float3 n:TEXCOORD0,float facing:TEXCOORD1):SV_Target{"
+    "clip(facing);float l=saturate(dot(normalize(n),normalize(float3(-.4,.65,.7))));"
+    "return float4(.16+.79*l,.23+.73*l,.31+.68*l,1);}";
+static const char* marker_shader =
+    "float4 main(float4 p:SV_Position,float2 uv:TEXCOORD0):SV_Target {"
+    "float r=length(uv-.5); if(r>.5) discard;"
+    "if(p.z>.5 && r<.30) discard;"
+    "return r>.44?float4(.02,.02,.02,1):p.z>.5?float4(.05,1,.20,1):float4(1,1,1,1);}";
 static const char* g_ps_solid_src =
     "struct PSIn { float4 pos : SV_POSITION; float2 uv : TEXCOORD0; };"
     "float4 main(PSIn i) : SV_Target {"
@@ -2329,7 +2860,7 @@ DECLARE(xrWaitFrame); DECLARE(xrBeginFrame); DECLARE(xrEndFrame); DECLARE(xrResu
 DECLARE(xrStringToPath); DECLARE(xrCreateActionSet); DECLARE(xrDestroyActionSet);
 DECLARE(xrCreateAction); DECLARE(xrSuggestInteractionProfileBindings);
 DECLARE(xrAttachSessionActionSets); DECLARE(xrCreateActionSpace);
-DECLARE(xrSyncActions); DECLARE(xrGetActionStateBoolean); DECLARE(xrGetActionStateFloat);
+DECLARE(xrApplyHapticFeedback); DECLARE(xrSyncActions); DECLARE(xrGetActionStateBoolean); DECLARE(xrGetActionStateFloat);
 DECLARE(xrGetActionStateVector2f);
 DECLARE(xrLocateSpace);
 
@@ -2347,7 +2878,7 @@ static BOOL resolve_all(HMODULE loader) {
     RESOLVE(xrStringToPath); RESOLVE(xrCreateActionSet); RESOLVE(xrDestroyActionSet);
     RESOLVE(xrCreateAction); RESOLVE(xrSuggestInteractionProfileBindings);
     RESOLVE(xrAttachSessionActionSets); RESOLVE(xrCreateActionSpace);
-    RESOLVE(xrSyncActions); RESOLVE(xrGetActionStateBoolean); RESOLVE(xrGetActionStateFloat);
+    RESOLVE(xrApplyHapticFeedback); RESOLVE(xrSyncActions); RESOLVE(xrGetActionStateBoolean); RESOLVE(xrGetActionStateFloat);
     RESOLVE(xrGetActionStateVector2f);
     RESOLVE(xrLocateSpace);
     return pxrCreateInstance && pxrGetInstanceProperties &&
@@ -2393,10 +2924,13 @@ static void log_xr_result(XrInstance instance, const char* label, XrResult resul
     char text[XR_MAX_RESULT_STRING_SIZE];
     text[0] = 0;
     if (instance && pxrResultToString) pxrResultToString(instance, result, text);
-    if (!text[0]) snprintf(text, sizeof(text), "xr_result_%ld", (long)result);
-    char detail[256];
-    snprintf(detail, sizeof(detail), "\"status\":\"failed\",\"stage\":\"%s\",\"xr_result\":%ld,\"xr_result_name\":\"%hs\"",
-        label, (long)result, text);
+    if (!text[0]) telemetry_snprintf(text, sizeof(text), "xr_result_%ld", (long)result);
+    char detail[512], escaped_text[XR_MAX_RESULT_STRING_SIZE * 2], escaped_label[128];
+    text[sizeof(text)-1] = 0;
+    json_escape(text, escaped_text, sizeof(escaped_text));
+    json_escape(label, escaped_label, sizeof(escaped_label));
+    telemetry_snprintf(detail, sizeof(detail), "\"status\":\"failed\",\"stage\":\"%s\",\"xr_result\":%ld,\"xr_result_name\":\"%hs\"",
+        escaped_label, (long)result, escaped_text);
     write_record(PROBE_ID, "disabled", detail);
 }
 
@@ -2458,6 +2992,7 @@ static BOOL create_controller_actions(XrInstance instance) {
         return FALSE;
     if (!create_controller_action(g_controller_action_set, XR_ACTION_TYPE_POSE_INPUT,
             "pointer_aim", "Pointer Aim", g_pointer_hand_path, &g_aim_action) ||
+
         !create_controller_action(g_controller_action_set, XR_ACTION_TYPE_FLOAT_INPUT,
             "pointer_trigger", "Pointer Trigger", g_pointer_hand_path, &g_trigger_action) ||
         !create_controller_action(g_controller_action_set, XR_ACTION_TYPE_BOOLEAN_INPUT,
@@ -2489,6 +3024,30 @@ static BOOL create_controller_actions(XrInstance instance) {
     BOOL aim_ready = XR_SUCCEEDED(pxrStringToPath(instance,
         controller_hands_swapped ? "/user/hand/left/input/aim/pose" :
                                    "/user/hand/right/input/aim/pose", &aim_path));
+    XrPath grab_pose_path = XR_NULL_PATH, grab_value_path = XR_NULL_PATH;
+    BOOL grab_bindings = create_controller_action(g_controller_action_set, XR_ACTION_TYPE_POSE_INPUT,
+            "world_grip_pose", "World Grip Pose", g_pointer_hand_path, &g_world_grip_pose) &&
+        create_controller_action(g_controller_action_set, XR_ACTION_TYPE_FLOAT_INPUT,
+            "world_squeeze", "World Grab", g_pointer_hand_path, &g_world_squeeze) &&
+        XR_SUCCEEDED(pxrStringToPath(instance, controller_hands_swapped ? "/user/hand/left/input/grip/pose" : "/user/hand/right/input/grip/pose", &grab_pose_path)) &&
+        XR_SUCCEEDED(pxrStringToPath(instance, controller_hands_swapped ? "/user/hand/left/input/squeeze/value" : "/user/hand/right/input/squeeze/value", &grab_value_path));
+    XrPath return_path = XR_NULL_PATH, follow_path = XR_NULL_PATH;
+    BOOL camera_bindings = create_controller_action(g_controller_action_set, XR_ACTION_TYPE_BOOLEAN_INPUT,
+            "camera_return", "Return to Game Camera", g_left_hand_path, &g_return_click) &&
+        create_controller_action(g_controller_action_set, XR_ACTION_TYPE_BOOLEAN_INPUT,
+            "camera_follow", "Toggle Live Camera Follow", g_right_hand_path, &g_follow_click) &&
+        XR_SUCCEEDED(pxrStringToPath(instance,"/user/hand/left/input/thumbstick/click",&return_path)) &&
+        XR_SUCCEEDED(pxrStringToPath(instance,"/user/hand/right/input/thumbstick/click",&follow_path));
+    XrPath haptic_path=XR_NULL_PATH;
+    BOOL haptic_binding=pxrApplyHapticFeedback &&
+        create_controller_action(g_controller_action_set,XR_ACTION_TYPE_VIBRATION_OUTPUT,
+            "character_contact","Character Contact",g_pointer_hand_path,&g_contact_haptic) &&
+        XR_SUCCEEDED(pxrStringToPath(instance,controller_hands_swapped?"/user/hand/left/output/haptic":"/user/hand/right/output/haptic",&haptic_path));
+    XrPath panel_haptic_path=XR_NULL_PATH;
+    BOOL panel_haptic_binding=pxrApplyHapticFeedback &&
+        create_controller_action(g_controller_action_set,XR_ACTION_TYPE_VIBRATION_OUTPUT,
+            "panel_hand_contact","Panel Hand Contact",g_panel_hand_path,&panel_haptic) &&
+        XR_SUCCEEDED(pxrStringToPath(instance,controller_hands_swapped?"/user/hand/right/output/haptic":"/user/hand/left/output/haptic",&panel_haptic_path));
     BOOL touch_ready = aim_ready &&
         XR_SUCCEEDED(pxrStringToPath(instance, "/interaction_profiles/oculus/touch_controller", &touch_profile)) &&
         XR_SUCCEEDED(pxrStringToPath(instance,
@@ -2515,14 +3074,44 @@ static BOOL create_controller_actions(XrInstance instance) {
             {g_panel_grip_pose_action, panel_grip_pose_path},
             {g_panel_grip_value_action, panel_grip_value_path},
             {g_right_stick_action, right_stick_path},
-            {g_left_stick_action, left_stick_path}
+            {g_left_stick_action, left_stick_path},
+            {0}, {0}, {0}, {0}, {0}, {0}
         };
         XrInteractionProfileSuggestedBinding suggested; ZeroMemory(&suggested, sizeof(suggested));
         suggested.type = XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING;
         suggested.interactionProfile = touch_profile;
         suggested.countSuggestedBindings = (uint32_t)(sizeof(bindings) / sizeof(bindings[0]));
         suggested.suggestedBindings = bindings;
+        suggested.countSuggestedBindings -= 6;
+        if (grab_bindings) {
+            bindings[suggested.countSuggestedBindings++] = (XrActionSuggestedBinding){g_world_grip_pose,grab_pose_path};
+            bindings[suggested.countSuggestedBindings++] = (XrActionSuggestedBinding){g_world_squeeze,grab_value_path};
+        }
+        if (camera_bindings) {
+            bindings[suggested.countSuggestedBindings++] = (XrActionSuggestedBinding){g_return_click,return_path};
+            bindings[suggested.countSuggestedBindings++] = (XrActionSuggestedBinding){g_follow_click,follow_path};
+        }
+        if(haptic_binding)
+            bindings[suggested.countSuggestedBindings++]=(XrActionSuggestedBinding){g_contact_haptic,haptic_path};
+        if(panel_haptic_binding)
+            bindings[suggested.countSuggestedBindings++]=(XrActionSuggestedBinding){panel_haptic,panel_haptic_path};
         touch_ready = XR_SUCCEEDED(pxrSuggestInteractionProfileBindings(instance, &suggested));
+        if(!touch_ready && panel_haptic_binding){
+            --suggested.countSuggestedBindings;
+            touch_ready=XR_SUCCEEDED(pxrSuggestInteractionProfileBindings(instance,&suggested));
+        }
+        if(!touch_ready && haptic_binding){
+            --suggested.countSuggestedBindings;
+            touch_ready=XR_SUCCEEDED(pxrSuggestInteractionProfileBindings(instance,&suggested));
+        }
+        if (!touch_ready && camera_bindings) {
+            suggested.countSuggestedBindings -= 2;
+            touch_ready = XR_SUCCEEDED(pxrSuggestInteractionProfileBindings(instance, &suggested));
+        }
+        if (!touch_ready && grab_bindings) {
+            suggested.countSuggestedBindings -= 2;
+            touch_ready = XR_SUCCEEDED(pxrSuggestInteractionProfileBindings(instance, &suggested));
+        }
     }
 
     XrPath simple_profile = XR_NULL_PATH, simple_select = XR_NULL_PATH;
@@ -2551,7 +3140,7 @@ static BOOL create_controller_actions(XrInstance instance) {
                       "\"status\":\"observed\",\"profile\":\"khr_simple\"");
     if (touch_ready) {
         char detail[256];
-        snprintf(detail, sizeof(detail),
+        telemetry_snprintf(detail, sizeof(detail),
             "\"status\":\"observed\",\"locomotion_hand\":\"%s\"," 
             "\"view_turn_hand\":\"%s\",\"hands_swapped\":%s",
             controller_hands_swapped ? "left" : "right",
@@ -2561,7 +3150,7 @@ static BOOL create_controller_actions(XrInstance instance) {
     }
     {
         char detail[320];
-        snprintf(detail, sizeof(detail),
+        telemetry_snprintf(detail, sizeof(detail),
             "\"status\":\"observed\",\"pointer_hand\":\"%s\"," 
             "\"panel_hand\":\"%s\",\"primary_face\":\"%s\"," 
             "\"secondary_face\":\"%s\",\"hands_swapped\":%s",
@@ -2595,6 +3184,9 @@ static BOOL attach_controller_actions(void) {
         write_disabled("controller_aim_space", NULL);
         return FALSE;
     }
+    space.action = g_world_grip_pose;
+    if (!g_world_grip_pose || XR_FAILED(pxrCreateActionSpace(g_session, &space, &g_world_grip_space)))
+        g_world_grip_space = XR_NULL_HANDLE;
     space.action = g_panel_grip_pose_action;
     space.subactionPath = g_panel_hand_path;
     if (XR_FAILED(pxrCreateActionSpace(g_session, &space, &g_panel_grip_space))) {
@@ -2604,7 +3196,7 @@ static BOOL attach_controller_actions(void) {
     g_controller_actions_ready = TRUE;
     {
         char detail[320];
-        snprintf(detail, sizeof(detail),
+        telemetry_snprintf(detail, sizeof(detail),
             "\"status\":\"observed\",\"pointer_hand\":\"%s\",\"panel_hand\":\"%s\"",
             controller_hands_swapped ? "left" : "right",
             controller_hands_swapped ? "right" : "left");
@@ -2621,6 +3213,7 @@ static void destroy_xr_state(XrRuntimeState* st) {
     g_panel_grip_was_down = FALSE;
     AcquireSRWLockExclusive(&eye_optics_lock);
     eye_optics.origin_valid = FALSE;
+    eye_optics.return_orientation_valid=FALSE;
     eye_optics.artificial_position = (Vec3){0.0f, 0.0f, 0.0f};
     eye_optics.artificial_yaw = 0.0f;
     eye_optics.artificial_pitch = 0.0f;
@@ -2632,7 +3225,24 @@ static void destroy_xr_state(XrRuntimeState* st) {
     g_navigation_move_logged = FALSE;
     g_navigation_turn_logged = FALSE;
     InterlockedExchange(&eye_optics_ready, 0);
+    if (probe_context) ID3D11DeviceContext_ClearState(probe_context);
+    for (uint32_t image=0; image<g_proj_image_count && image<MAX_IMAGES; ++image) {
+        for (uint32_t eye=0;eye<MAX_EYES;++eye) {
+            if(g_proj_rtvs[image][eye]) ID3D11RenderTargetView_Release(g_proj_rtvs[image][eye]);
+            g_proj_rtvs[image][eye]=NULL;
+        }
+        /* xrEnumerateSwapchainImages lends its textures. Only the views are ours. */
+        g_proj_images[image]=NULL;
+    }
+    g_proj_image_count=0;
     if (g_swapchain_proj) { pxrDestroySwapchain(g_swapchain_proj); g_swapchain_proj = 0; }
+    g_world_grab = (WorldGrab){0};
+    if (g_world_grip_space) { pxrDestroySpace(g_world_grip_space); g_world_grip_space = 0; }
+    g_world_grip_pose = g_world_squeeze = g_return_click = g_follow_click = XR_NULL_HANDLE;
+    g_click_generation = 0;g_contact_haptic=panel_haptic=XR_NULL_HANDLE;
+    AcquireSRWLockExclusive(&contact_lock);ZeroMemory(&contact,sizeof contact);ReleaseSRWLockExclusive(&contact_lock);
+    InterlockedExchange(&return_camera_generation,0);
+    g_follow_armed=FALSE;
     if (g_panel_grip_space) { pxrDestroySpace(g_panel_grip_space); g_panel_grip_space = 0; }
     if (g_aim_space) { pxrDestroySpace(g_aim_space); g_aim_space = 0; }
     if (g_tracking_space) { pxrDestroySpace(g_tracking_space); g_tracking_space = 0; }
@@ -2645,14 +3255,11 @@ static void destroy_xr_state(XrRuntimeState* st) {
         g_panel_grip_pose_action = g_panel_grip_value_action = 0;
         g_right_stick_action = g_left_stick_action = 0;
     }
-    if (g_proj_rtvs[0][0]) {
-        for (uint32_t i = 0; i < g_proj_image_count && i < MAX_IMAGES; ++i)
-            for (uint32_t e = 0; e < MAX_EYES; ++e)
-                if (g_proj_rtvs[i][e]) { ID3D11RenderTargetView_Release(g_proj_rtvs[i][e]); g_proj_rtvs[i][e] = NULL; }
-    }
-    for (uint32_t i = 0; i < g_proj_image_count && i < MAX_IMAGES; ++i)
-        if (g_proj_images[i]) { ID3D11Texture2D_Release(g_proj_images[i]); g_proj_images[i] = NULL; }
-    g_proj_image_count = 0;
+    xr_eye_cache_generation=0;
+    xr_cache_telemetry=(StereoCacheTelemetry){0};
+    g_begun=FALSE;
+    g_session_state=XR_SESSION_STATE_UNKNOWN;
+    menu_reset();
     if (g_panel_srv) { ID3D11ShaderResourceView_Release(g_panel_srv); g_panel_srv = NULL; }
     if (g_panel_tex) { ID3D11Texture2D_Release(g_panel_tex); g_panel_tex = NULL; }
     InterlockedExchange(&g_panel_frame_ready, 0);
@@ -2682,7 +3289,7 @@ static BOOL create_probe_device(const LUID* preferred_luid, char* detail, size_t
     IDXGIFactory1* factory = NULL;
     HRESULT hr = CreateDXGIFactory1(&iid_dxgi_factory1, (void**)&factory);
     if (FAILED(hr) || !factory) {
-        snprintf(detail, detail_chars, "\"factory_hr\":%ld", (long)hr);
+        telemetry_snprintf(detail, detail_chars, "\"factory_hr\":%ld", (long)hr);
         return FALSE;
     }
     IDXGIAdapter1* chosen = NULL;
@@ -2721,14 +3328,20 @@ static BOOL create_probe_device(const LUID* preferred_luid, char* detail, size_t
     BOOL have_desc = SUCCEEDED(chosen->lpVtbl->GetDesc1(chosen, &desc));
     chosen->lpVtbl->Release(chosen);
     if (FAILED(hr) || !probe_device || !probe_context) {
-        snprintf(detail, detail_chars, "\"device_hr\":%ld", (long)hr);
+        telemetry_snprintf(detail, detail_chars, "\"device_hr\":%ld", (long)hr);
         return FALSE;
     }
-    snprintf(detail, detail_chars,
-        "\"status\":\"observed\",\"adapter_luid\":\"%08lx-%08lx\",\"adapter_desc\":\"%ls\","
+    char adapter_utf8[512] = {0}, adapter_escaped[1024];
+    desc.Description[(sizeof(desc.Description) / sizeof(desc.Description[0])) - 1] = 0;
+    if (!have_desc || !WideCharToMultiByte(CP_UTF8, 0, desc.Description, -1,
+            adapter_utf8, sizeof(adapter_utf8), NULL, NULL))
+        memcpy(adapter_utf8, "unavailable", sizeof("unavailable"));
+    json_escape(adapter_utf8, adapter_escaped, sizeof(adapter_escaped));
+    telemetry_snprintf(detail, detail_chars,
+        "\"status\":\"observed\",\"adapter_luid\":\"%08lx-%08lx\",\"adapter_desc\":\"%s\","
         "\"feature_level\":%u,\"isolated_from_game_device\":true",
         (unsigned long)desc.AdapterLuid.HighPart, (unsigned long)desc.AdapterLuid.LowPart,
-        have_desc ? desc.Description : L"", (unsigned)selected);
+        adapter_escaped, (unsigned)selected);
     return TRUE;
 }
 
@@ -2775,7 +3388,7 @@ static BOOL create_projection_swapchain(void) {
                 (ID3D11Resource*)g_proj_images[i], &rtvd, &g_proj_rtvs[i][eye]);
         }
     }
-    snprintf(detail, sizeof(detail),
+    telemetry_snprintf(detail, sizeof(detail),
         "\"status\":\"observed\",\"images\":%u,\"array_size\":%u,\"width\":%u,\"height\":%u",
         count, swci.arraySize, swci.width, swci.height);
     write_record("CAP-004", "projection_swapchain_created", detail);
@@ -2801,7 +3414,7 @@ static BOOL open_shared_on_probe_device(void) {
     HRESULT hr = ID3D11Device_OpenSharedResource(probe_device, handle,
         &iid_d3d11_texture2d, (void**)&replacement_local);
     if (FAILED(hr) || !replacement_local) {
-        snprintf(detail, sizeof(detail), "\"open_hr\":%ld", (long)hr);
+        telemetry_snprintf(detail, sizeof(detail), "\"open_hr\":%ld", (long)hr);
         write_disabled("open_shared_resource", detail);
         return FALSE;
     }
@@ -2822,7 +3435,7 @@ static BOOL open_shared_on_probe_device(void) {
     panel_td.MiscFlags = 0;
     HRESULT cache_hr = ID3D11Device_CreateTexture2D(probe_device, &panel_td, NULL, &replacement_cache);
     if (FAILED(cache_hr) || !replacement_cache) {
-        snprintf(detail, sizeof(detail), "\"panel_cache_hr\":%ld", (long)cache_hr);
+        telemetry_snprintf(detail, sizeof(detail), "\"panel_cache_hr\":%ld", (long)cache_hr);
         write_disabled("panel_cache_create", detail);
         goto fail;
     }
@@ -2850,7 +3463,7 @@ static BOOL open_shared_on_probe_device(void) {
     xr_desktop_mirror_handle = handle;
     g_panel_width = td.Width;
     g_panel_height = td.Height;
-    snprintf(detail, sizeof(detail),
+    telemetry_snprintf(detail, sizeof(detail),
         "\"status\":\"observed\",\"generation\":%ld,\"cross_device_open\":true,"
         "\"width\":%u,\"height\":%u,\"format\":%u,"
         "\"local_cache_created\":%d,\"srv_created\":%d",
@@ -2966,11 +3579,13 @@ static void refresh_flat_cache_for_generation(LONG generation) {
     }
 }
 
-static BOOL copy_fresh_eye_pair_to_projection(uint32_t projection_index) {
+#include "base_eye_output.h"
+static BOOL draw_cached_eye_pair_to_projection(uint32_t projection_index,LONG generation,BOOL reused);
+static BOOL copy_fresh_eye_pair_to_projection_body(uint32_t projection_index) {
     LONG generation = InterlockedCompareExchange(&published_eye_generation, 0, 0);
     LONG64 produced_tick = InterlockedCompareExchange64(&eye_pair_tick, 0, 0);
     LONG64 age_ms = (LONG64)GetTickCount64() - produced_tick;
-    if (generation <= 0 || produced_tick <= 0 || age_ms < 0 || age_ms > 500 ||
+    if (bp_transport_blocked(&bp_transport) || generation <= 0 || produced_tick <= 0 ||
         projection_index >= g_proj_image_count || !open_eye_pair_on_probe_device()) {
         if (xr_active_source_generation) {
             write_record("IMMERSIVE-SOURCE", "presentation_fallback",
@@ -2979,48 +3594,146 @@ static BOOL copy_fresh_eye_pair_to_projection(uint32_t projection_index) {
         }
         return FALSE;
     }
-    BOOL left = SUCCEEDED(IDXGIKeyedMutex_AcquireSync(g_local_eye_km[0], 1, 0));
-    BOOL right = left && SUCCEEDED(IDXGIKeyedMutex_AcquireSync(g_local_eye_km[1], 1, 0));
-    if (left && right) {
+    HRESULT acquire_result[3];
+    LONG receipt_owner=game_pair_telemetry.owned?BP_TRANSPORT_OWN:BP_TRANSPORT_LIVE;
+    LONG64 receipt_serial=game_pair_telemetry.pair_serial;
+    if(bp_transport_pending(&bp_transport) &&
+        !bp_transport_matches(&bp_transport,receipt_owner,generation,receipt_serial)) return FALSE;
+    int acquired=bp_transport_pending(&bp_transport)?
+        bp_keyed_pair_acquire(g_local_eye_km[0],g_local_eye_km[1],1,acquire_result):BP_KM_PENDING;
+    if(acquired==BP_KM_BROKEN) {
+        bp_transport_quarantine(&bp_transport);
+        if(generation==InterlockedCompareExchange(&bp_published_generation,0,0)) bp_consumer_stop(generation);
+        return FALSE;
+    }
+    if (acquired==BP_KM_READY) {
         for (UINT eye = 0; eye < 2; ++eye)
             ID3D11DeviceContext_CopyResource(probe_context,
                 (ID3D11Resource*)g_eye_cache_tex[eye], (ID3D11Resource*)g_local_eye_tex[eye]);
-        IDXGIKeyedMutex_ReleaseSync(g_local_eye_km[1], 0);
-        IDXGIKeyedMutex_ReleaseSync(g_local_eye_km[0], 0);
+        /* The producer cannot replace either texture while both mutexes are held.
+           Attribute metadata to this copy, never to a later published pair. */
+        xr_cache_telemetry = game_pair_telemetry;
+        home_cached_views=game_pair_telemetry.owned?home_pair_views:(HomeRenderViews){0};
+        HRESULT owned_right_release=IDXGIKeyedMutex_ReleaseSync(g_local_eye_km[1], 0);
+        HRESULT owned_left_release=IDXGIKeyedMutex_ReleaseSync(g_local_eye_km[0], 0);
+        if(owned_left_release!=S_OK || owned_right_release!=S_OK ||
+            !bp_transport_ack(&bp_transport,receipt_owner,generation,receipt_serial)) {
+            bp_transport_quarantine(&bp_transport);
+            if(xr_cache_telemetry.owned) bp_consumer_stop(generation);
+            return FALSE;
+        }
+        xr_live_cache_produced_tick = xr_cache_telemetry.owned ? 0 : (ULONGLONG)produced_tick;
         xr_eye_cache_generation = generation;
     } else {
-        if (left) IDXGIKeyedMutex_ReleaseSync(g_local_eye_km[0], 0);
         if (xr_eye_cache_generation != generation) return FALSE;
     }
+    /* A stale published pair still owns key 1. Return/ack it before rejecting
+       presentation, or the producer can never publish a fresh replacement.
+       Recheck time after GPU transfer; this does not extend display freshness. */
+    age_ms = (LONG64)GetTickCount64() - produced_tick;
+    if(age_ms < 0 || age_ms > 500) return FALSE;
+    if(xr_cache_telemetry.owned && (xr_cache_telemetry.generation!=generation ||
+        InterlockedCompareExchange(&bp_published_generation,0,0)!=generation ||
+        InterlockedCompareExchange(&published_eye_generation,0,0)!=generation)) return FALSE;
+    if(xr_cache_telemetry.owned) {
+        BpIdentity cached={(uint64_t)xr_cache_telemetry.generation,xr_cache_telemetry.source,
+            xr_cache_telemetry.pose,xr_cache_telemetry.config,xr_cache_telemetry.capture_tick,
+            xr_cache_telemetry.scene,0};
+        if(!bp_consumer_current(&bp.c,&cached)) return FALSE;
+        LONG64 cached_age=(LONG64)GetTickCount64()-(LONG64)xr_cache_telemetry.capture_tick;
+        if(!xr_cache_telemetry.capture_tick || cached_age<0 || cached_age>500) return FALSE;
+    }
     refresh_flat_cache_for_generation(generation);
-    if (!g_eye_copy_vs || !g_ps || !g_sampler) return FALSE;
+    return draw_cached_eye_pair_to_projection(projection_index,generation,acquired!=BP_KM_READY);
+}
+
+/* Pure XR-owned cache draw. Lock-busy reuse never opens/reads a shared image,
+   takes its mutex, refreshes a flat source, or reads mutable bp.c. */
+static BOOL draw_cached_eye_pair_to_projection(uint32_t projection_index,LONG generation,BOOL reused) {
+    BOOL owned=xr_cache_telemetry.owned;
+    ID3D11PixelShader* eye_ps=bp_eye_output_shader(owned!=FALSE,g_ps,g_panel_ps);
+    if(generation<=0 || xr_eye_cache_generation!=generation || xr_cache_telemetry.generation!=generation ||
+        projection_index>=g_proj_image_count || !g_eye_cache_tex[0] || !g_eye_cache_tex[1] ||
+        !g_eye_cache_srv[0] || !g_eye_cache_srv[1] || !g_proj_rtvs[projection_index][0] || !g_proj_rtvs[projection_index][1] ||
+        !g_eye_copy_vs || !eye_ps || !g_sampler) return FALSE;
+    BpLeaseSnapshot lease={0};BpIdentity cached={0};
+    if(owned) {
+        cached=(BpIdentity){(uint64_t)xr_cache_telemetry.generation,xr_cache_telemetry.source,
+            xr_cache_telemetry.pose,xr_cache_telemetry.config,xr_cache_telemetry.capture_tick,xr_cache_telemetry.scene,0};
+        if(!bp_lease_snapshot(&bp_consumer_lease,&lease)) return FALSE;
+    }
     D3D11_VIEWPORT vp = {0, 0, (FLOAT)g_eye_width, (FLOAT)g_eye_height, 0, 1};
     ID3D11DeviceContext_RSSetViewports(probe_context, 1, &vp);
     ID3D11DeviceContext_IASetInputLayout(probe_context, NULL);
     ID3D11DeviceContext_IASetPrimitiveTopology(probe_context, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     ID3D11DeviceContext_VSSetShader(probe_context, g_eye_copy_vs, NULL, 0);
-    ID3D11DeviceContext_PSSetShader(probe_context, g_ps, NULL, 0);
+    ID3D11DeviceContext_PSSetShader(probe_context, eye_ps, NULL, 0);
     ID3D11DeviceContext_PSSetSamplers(probe_context, 0, 1, &g_sampler);
     for (UINT eye = 0; eye < 2; ++eye) {
         ID3D11DeviceContext_OMSetRenderTargets(probe_context, 1,
             &g_proj_rtvs[projection_index][eye], NULL);
         ID3D11DeviceContext_PSSetShaderResources(probe_context, 0, 1, &g_eye_cache_srv[eye]);
+        /* Final authorization includes active+both published generations and
+           reads the sequence LAST. It authorizes this whole stereo draw. */
+        if(eye==0 && owned && !bp_lease_authorize(&bp_consumer_lease,&lease,&cached,
+            xr_cache_telemetry.capture_tick,GetTickCount64(),&published_eye_generation,&bp_published_generation)) return FALSE;
+        if (eye == 0 && !owned) {
+            ULONGLONG now = GetTickCount64();
+            if (!xr_live_cache_produced_tick || now < xr_live_cache_produced_tick ||
+                now - xr_live_cache_produced_tick > 500 || bp_transport_blocked(&bp_transport) ||
+                InterlockedCompareExchange(&live_retired_through,0,0) >= generation ||
+                InterlockedCompareExchange(&bp_published_generation,0,0) == generation ||
+                InterlockedCompareExchange(&source_generation,0,0) != generation ||
+                InterlockedCompareExchange(&published_eye_generation,0,0) != generation) return FALSE;
+        }
         ID3D11DeviceContext_Draw(probe_context, 3, 0);
     }
     ID3D11ShaderResourceView* null_srv = NULL;
     ID3D11DeviceContext_PSSetShaderResources(probe_context, 0, 1, &null_srv);
     ++immersive_frames_total;
+    stereo_observe_draw(&xr_frame_telemetry, &xr_cache_telemetry, projection_index, reused);
     if (xr_active_source_generation != generation) {
         xr_active_source_generation = generation;
-        char detail[256];
-        snprintf(detail, sizeof(detail),
-            "\"status\":\"immersive\",\"generation\":%ld,\"pair_serial\":%lld,"
-            "\"fresh_age_ms\":%lld",
-            (long)generation, (long long)InterlockedCompareExchange64(&eye_pair_serial, 0, 0),
-            (long long)age_ms);
-        write_record("IMMERSIVE-SOURCE", "first_stereo_pair_submitted", detail);
+        char detail[768];
+        stereo_telemetry_detail(&xr_frame_telemetry, 0, detail, sizeof(detail));
+        write_record("IMMERSIVE-SOURCE", "stereo_projection_draw_issued", detail);
+        if(xr_cache_telemetry.owned) {
+            char owned_detail[640];
+            telemetry_snprintf(owned_detail,sizeof(owned_detail),
+                "\"status\":\"draw_issued_not_acceptance\",\"generation\":%ld,\"pair_serial\":%lld,"
+                "\"source\":%llu,\"scene\":%d,\"pose_epoch\":%llu,\"config_epoch\":%llu,"
+                "\"capture_tick\":%llu,\"xr_frame_id\":%llu,\"source_pose_follow\":true,\"dynamic_6dof\":false",
+                (long)xr_cache_telemetry.generation,(long long)xr_cache_telemetry.pair_serial,
+                (unsigned long long)xr_cache_telemetry.source,xr_cache_telemetry.scene,
+                (unsigned long long)xr_cache_telemetry.pose,(unsigned long long)xr_cache_telemetry.config,
+                (unsigned long long)xr_cache_telemetry.capture_tick,xr_frame_telemetry.frame_id);
+            write_record("OWN-BASE","base_pair_consumed",owned_detail);
+        }
     }
     return TRUE;
+}
+
+static BOOL copy_fresh_eye_pair_to_projection(uint32_t projection_index) {
+    /* Owned producer/retirement and XR CPU consumption share one interval.
+       Never wait for a managed configuration or GPU query on the XR worker. */
+    if(!TryAcquireSRWLockShared(&bp_lock)) {
+        BOOL drawn=draw_cached_eye_pair_to_projection(projection_index,xr_eye_cache_generation,TRUE);
+        static LONG reported_live_generation;
+        if(drawn && !xr_cache_telemetry.owned && reported_live_generation!=xr_eye_cache_generation) {
+            reported_live_generation=xr_eye_cache_generation;
+            char detail[128];
+            telemetry_snprintf(detail,sizeof detail,"\"stage\":\"live_cache_busy_reuse\",\"generation\":%ld",xr_eye_cache_generation);
+            write_record("IMMERSIVE-SOURCE","live_cache_busy_reuse",detail);
+        }
+        return drawn;
+    }
+    LONG published=InterlockedCompareExchange(&published_eye_generation,0,0);
+    BOOL owned=published>0 && published==InterlockedCompareExchange(&bp_published_generation,0,0);
+    BOOL valid=!owned || (!bp.c.retiring && bp.c.phase==BP_ACTIVE &&
+        published==(LONG)bp.c.identity.generation);
+    BOOL result=valid?copy_fresh_eye_pair_to_projection_body(projection_index):FALSE;
+    ReleaseSRWLockShared(&bp_lock);
+    return result;
 }
 
 /* LH off-center perspective, D3D-style [0,1] depth; angles in radians */
@@ -3279,17 +3992,32 @@ static BOOL move_pointer_to_panel(float u, float v) {
     return SendInput(1, &input, sizeof(input)) == 1;
 }
 
-static BOOL read_boolean_action(XrAction action, BOOL* active, BOOL* current) {
+static BOOL read_boolean_action_for_hand(XrAction action, XrPath hand, BOOL* active, BOOL* current) {
     XrActionStateGetInfo get; ZeroMemory(&get, sizeof(get));
     get.type = XR_TYPE_ACTION_STATE_GET_INFO;
     get.action = action;
-    get.subactionPath = g_pointer_hand_path;
+    get.subactionPath = hand;
     XrActionStateBoolean state; ZeroMemory(&state, sizeof(state));
     state.type = XR_TYPE_ACTION_STATE_BOOLEAN;
     if (XR_FAILED(pxrGetActionStateBoolean(g_session, &get, &state))) return FALSE;
     if (active) *active = state.isActive;
     if (current) *current = state.currentState;
     return TRUE;
+}
+
+static BOOL read_boolean_action(XrAction action, BOOL* active, BOOL* current) {
+    return read_boolean_action_for_hand(action,g_pointer_hand_path,active,current);
+}
+
+static BOOL camera_click_edge(XrAction action, XrPath hand, BOOL* armed) {
+    BOOL active = FALSE, down = FALSE;
+    if (!action || !read_boolean_action_for_hand(action,hand,&active,&down) || !active) {
+        *armed = FALSE;
+        return FALSE;
+    }
+    BOOL pressed = down && *armed;
+    *armed = !down;
+    return pressed;
 }
 
 static BOOL read_float_action_for_path(XrAction action, XrPath subaction_path,
@@ -3324,10 +4052,88 @@ static BOOL read_vector2_action_for_path(XrAction action, XrPath subaction_path,
     return TRUE;
 }
 
+/* Positions are metres in the same LOCAL space as physical head translation. */
+static Vec3 world_grab_delta(WorldGrab* grab, LONG generation, XrTime time,
+        BOOL tracked, float squeeze, XrVector3f position) {
+    Vec3 delta = {0};
+    if (!tracked || generation <= 0 || !isfinite(squeeze) || !isfinite(position.x) ||
+        !isfinite(position.y) || !isfinite(position.z)) {
+        *grab = (WorldGrab){0};
+        return delta;
+    }
+    if (generation != grab->generation || time <= grab->time || time-grab->time > 250000000)
+        *grab = (WorldGrab){0};
+    if (squeeze <= 0.25f) {
+        grab->armed = TRUE;
+        grab->holding = FALSE;
+    } else if (grab->holding) {
+        delta = (Vec3){grab->position.x-position.x, grab->position.y-position.y,
+                       position.z-grab->position.z};
+    } else if (grab->armed && squeeze >= 0.72f) {
+        grab->holding = TRUE;
+        grab->armed = FALSE;
+    }
+    grab->position = position;
+    grab->generation = generation;
+    grab->time = time;
+    return delta;
+}
+
+static void sample_contact(unsigned side,BOOL eligible,XrVector3f pos,XrAction haptic,XrPath path) {
+    if(!contact_consent || !contact_enabled)return;
+    if(!TryAcquireSRWLockExclusive(&contact_lock))return;
+    HandContact* slot=&contact[side];
+    ULONGLONG now=GetTickCount64();
+    LONG gen=eligible && !g_aux_panel_visible?xr_frame_telemetry.generation:0;
+    BOOL pulse=gen && slot->pulse_gen==gen && now-slot->pulse_tick<=160;
+    slot->hand=pos;slot->gen=gen;slot->tick=now;slot->pulse_gen=0;
+    if(!gen)slot->surface_gen=0;
+    ReleaseSRWLockExclusive(&contact_lock);
+    if(pulse && contact_haptics && haptic_strength>0 && haptic_duration>0 && haptic && pxrApplyHapticFeedback){
+        XrHapticActionInfo info={.type=XR_TYPE_HAPTIC_ACTION_INFO,.action=haptic,.subactionPath=path};
+        XrHapticVibration vibration={.type=XR_TYPE_HAPTIC_VIBRATION,.duration=(XrDuration)(haptic_duration*1000000.0),.amplitude=haptic_strength/100.f,.frequency=XR_FREQUENCY_UNSPECIFIED};
+        (void)pxrApplyHapticFeedback(g_session,&info,(const XrHapticBaseHeader*)&vibration);
+    }
+}
+static Vec3 read_world_grab(XrTime time) {
+    BOOL active = FALSE;
+    float squeeze = 0;
+    XrSpaceLocation location = {.type=XR_TYPE_SPACE_LOCATION};
+    XrSpaceLocationFlags required = XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_POSITION_TRACKED_BIT;
+    BOOL tracked = g_world_grip_space && g_tracking_space &&
+        XR_SUCCEEDED(pxrLocateSpace(g_world_grip_space, g_tracking_space, time, &location)) &&
+        (location.locationFlags & required) == required;
+    BOOL squeeze_ready=read_float_action_for_path(g_world_squeeze,g_pointer_hand_path,&active,&squeeze) && active;
+    float activation=squeeze;
+    BOOL can_grab=tracked && squeeze_ready;
+    if(grab_with_trigger){
+        BOOL trigger_active=FALSE;
+        can_grab=tracked && read_float_action_for_path(g_trigger_action,g_pointer_hand_path,&trigger_active,&activation) && trigger_active;
+    }
+    sample_contact(0,tracked && squeeze<.25f && (!grab_with_trigger || activation<.25f),location.pose.position,g_contact_haptic,g_pointer_hand_path);
+    XrSpaceLocation panel={.type=XR_TYPE_SPACE_LOCATION};
+    float panel_grip=0;
+    (void)read_float_action_for_path(g_panel_grip_value_action,g_panel_hand_path,&active,&panel_grip);
+    BOOL panel_tracked=g_panel_grip_space && g_tracking_space &&
+        panel_grip<.25f && XR_SUCCEEDED(pxrLocateSpace(g_panel_grip_space,g_tracking_space,time,&panel)) &&
+        (panel.locationFlags&required)==required;
+    sample_contact(1,panel_tracked,panel.pose.position,panel_haptic,g_panel_hand_path);
+    BOOL valid=can_grab && !g_aux_panel_visible && (grab_panel_hand?panel_tracked:tracked);
+    return world_grab_delta(&g_world_grab, xr_frame_telemetry.generation, time,
+                            valid, activation, grab_panel_hand?panel.pose.position:location.pose.position);
+}
+
 static void update_controller_navigation(XrTime display_time,
-        BOOL immersive_active, BOOL actions_synced) {
-    if (!immersive_active || !actions_synced || !g_controller_actions_ready ||
+        BOOL immersive_active, BOOL actions_synced, BOOL fresh_pose) {
+    if (!fresh_pose || !immersive_active || !actions_synced || !g_controller_actions_ready ||
             g_session_state != (int)XR_SESSION_STATE_FOCUSED) {
+        if (TryAcquireSRWLockExclusive(&contact_lock)) {
+            ZeroMemory(contact,sizeof(contact));
+            ReleaseSRWLockExclusive(&contact_lock);
+        }
+        g_click_generation = 0;
+        g_return_button = (ReturnButton){0};
+        g_world_grab = (WorldGrab){0};
         g_navigation_last_time = 0;
         g_navigation_turn_x_latched = FALSE;
         g_navigation_turn_y_latched = FALSE;
@@ -3335,13 +4141,14 @@ static void update_controller_navigation(XrTime display_time,
     }
     BOOL move_active = FALSE, turn_active = FALSE;
     XrVector2f move = {0.0f, 0.0f}, turn = {0.0f, 0.0f};
-    XrAction move_action = controller_hands_swapped ?
+    BOOL left_moves=controller_hands_swapped != swap_move_sticks;
+    XrAction move_action = left_moves ?
         g_left_stick_action : g_right_stick_action;
-    XrPath move_path = controller_hands_swapped ?
+    XrPath move_path = left_moves ?
         g_left_hand_path : g_right_hand_path;
-    XrAction turn_action = controller_hands_swapped ?
+    XrAction turn_action = left_moves ?
         g_right_stick_action : g_left_stick_action;
-    XrPath turn_path = controller_hands_swapped ?
+    XrPath turn_path = left_moves ?
         g_right_hand_path : g_left_hand_path;
     if (!read_vector2_action_for_path(move_action, move_path,
             &move_active, &move) || !move_active)
@@ -3354,16 +4161,50 @@ static void update_controller_navigation(XrTime display_time,
     if (g_navigation_last_time > 0 && display_time > g_navigation_last_time)
         dt_seconds = (float)((double)(display_time - g_navigation_last_time) * 0.000000001);
     g_navigation_last_time = display_time;
+    LONG generation = xr_frame_telemetry.generation;
+    if (generation != g_click_generation) {
+        g_return_button = (ReturnButton){0};
+        g_click_generation = generation;
+    }
+    BOOL active = FALSE, down = FALSE;
+    BOOL readable = g_return_click && read_boolean_action_for_hand(g_return_click,g_left_hand_path,&active,&down);
+    CameraGesture gesture = camera_return_gesture(&g_return_button, readable && active, down, display_time);
+    BOOL reset = gesture == CAMERA_RETURN;
+    Vec3 grab = read_world_grab(display_time);
     AcquireSRWLockExclusive(&eye_optics_lock);
+    if (eye_optics.origin_valid && (grab.x || grab.y || grab.z)) {
+        grab = quat_rotate(tracking_to_navigation(&eye_optics), grab);
+        Vec3 p = eye_optics.artificial_position;
+        p = (Vec3){p.x + grab.x, p.y + grab.y, p.z + grab.z};
+        if (isfinite(p.x) && isfinite(p.y) && isfinite(p.z)) eye_optics.artificial_position = p;
+    }
     uint32_t changed = apply_navigation_input(&eye_optics, move, turn, dt_seconds,
         &g_navigation_turn_x_latched, &g_navigation_turn_y_latched);
+    if (gesture == CAMERA_RECENTER && generation > 0 && commit_immersive_environment_origin(&eye_optics)) {
+        eye_optics.artificial_position = (Vec3){0};
+        eye_optics.artificial_yaw = eye_optics.artificial_pitch = 0;
+        eye_optics.return_orientation=eye_optics.current_center.orientation;
+        eye_optics.return_orientation_valid=TRUE;
+        immersive_entry_origin_committed = TRUE;
+        g_world_grab = (WorldGrab){0};
+    }
+    if (reset && generation > 0 && eye_optics.origin_valid && InterlockedCompareExchange(&eye_optics_ready,0,0)) {
+        eye_optics.return_orientation=eye_optics.current_center.orientation;
+        eye_optics.return_orientation_valid=TRUE;
+        eye_optics.artificial_yaw=eye_optics.artificial_pitch=0;
+        Vec3 offset=physical_displacement(&eye_optics);
+        eye_optics.artificial_position=(Vec3){-offset.x,-offset.y,-offset.z};
+        g_world_grab = (WorldGrab){0};
+        if (xr_cache_telemetry.owned) refresh_frozen_camera_anchor();
+        else InterlockedExchange(&return_camera_generation,generation);
+    }
     ReleaseSRWLockExclusive(&eye_optics_lock);
     if ((changed & NAV_STEP_MOVED) && !g_navigation_move_logged) {
         g_navigation_move_logged = TRUE;
         char detail[384];
         float effective_speed = effective_navigation_speed_mps(nav_locomotion_speed_mps,
             world_scale, nav_locomotion_scale_compensation_enabled);
-        snprintf(detail, sizeof(detail),
+        telemetry_snprintf(detail, sizeof(detail),
             "\"status\":\"observed\",\"hand\":\"%s\"," 
             "\"basis\":\"final_view_roll_free\",\"configured_speed_mps\":%.3f,"
             "\"effective_speed_mps\":%.3f,\"world_scale_compensation\":%s",
@@ -3375,7 +4216,7 @@ static void update_controller_navigation(XrTime display_time,
     if ((changed & NAV_STEP_SNAPPED) && !g_navigation_turn_logged) {
         g_navigation_turn_logged = TRUE;
         char detail[256];
-        snprintf(detail, sizeof(detail),
+        telemetry_snprintf(detail, sizeof(detail),
             "\"status\":\"observed\",\"hand\":\"%s\"," 
             "\"axes\":\"world_yaw_pitch\",\"snap_angle_degrees\":%.1f",
             controller_hands_swapped ? "right" : "left",
@@ -3383,6 +4224,113 @@ static void update_controller_navigation(XrTime display_time,
         write_record("CTRL-006", "controller_view_snap_applied", detail);
     }
 }
+
+/* Rotate into the eye frame before reflecting its depth into D3D view space. */
+static void contact_eye_view(const XrPosef* pose,float* m){
+    XrQuaternionf q=pose->orientation;
+    Quat inverse=quat_conjugate((Quat){q.x,q.y,q.z,q.w});
+    const Vec3 basis[]={{1,0,0},{0,1,0},{0,0,1},
+        {-pose->position.x,-pose->position.y,-pose->position.z}};
+    for(int i=0;i<4;i++){
+        Vec3 v=quat_rotate(inverse,basis[i]);
+        m[4*i]=v.x;m[4*i+1]=v.y;m[4*i+2]=-v.z;m[4*i+3]=i==3?1:0;
+    }
+}
+static void draw_hand_sphere(UINT index,const XrView* eyes,XrVector3f point){
+    if(!sphere_vs || !sphere_ps || !g_cb)return;
+    D3D11_VIEWPORT viewport={0,0,(float)g_eye_width,(float)g_eye_height,0,1};
+    ID3D11DeviceContext_RSSetViewports(probe_context,1,&viewport);
+    ID3D11DeviceContext_RSSetState(probe_context,g_raster);
+    ID3D11DeviceContext_VSSetShader(probe_context,sphere_vs,NULL,0);
+    ID3D11DeviceContext_PSSetShader(probe_context,sphere_ps,NULL,0);
+    ID3D11DeviceContext_VSSetConstantBuffers(probe_context,0,1,&g_cb);
+    for(unsigned e=0;e<2;e++){
+        float view[16],proj[16],vp[16],model[16]={0};contact_eye_view(&eyes[e].pose,view);
+        build_projection(&eyes[e].fov,.05f,100.f,proj);
+        model[0]=model[5]=model[10]=hand_radius_mm/1000.f;model[15]=1;
+        for(unsigned j=0;j<3;j++)model[12+j]=view[j]*point.x+view[4+j]*point.y+view[8+j]*point.z+view[12+j];
+        mat_mul(vp,proj,model);
+        D3D11_MAPPED_SUBRESOURCE mapped;
+        if(FAILED(ID3D11DeviceContext_Map(probe_context,(ID3D11Resource*)g_cb,0,D3D11_MAP_WRITE_DISCARD,0,&mapped)))continue;
+        memcpy(mapped.pData,vp,sizeof(vp));ID3D11DeviceContext_Unmap(probe_context,(ID3D11Resource*)g_cb,0);
+        ID3D11DeviceContext_OMSetRenderTargets(probe_context,1,&g_proj_rtvs[index][e],NULL);
+        ID3D11DeviceContext_Draw(probe_context,16*12*6,0);
+    }
+}
+static void draw_space_marker(UINT index,const XrView* eyes,XrVector3f point,BOOL surface) {
+    for(UINT i=0;i<2;++i){
+        float proj[16],view[16],vp[16];
+        build_projection(&eyes[i].fov,.05f,100.f,proj);
+        contact_eye_view(&eyes[i].pose,view); mat_mul(vp,proj,view);
+        float w=vp[3]*point.x+vp[7]*point.y+vp[11]*point.z+vp[15];
+        if(!(w>.05f && w<100.f))continue;
+        float x=(vp[0]*point.x+vp[4]*point.y+vp[8]*point.z+vp[12])/w;
+        float y=(vp[1]*point.x+vp[5]*point.y+vp[9]*point.z+vp[13])/w;
+        if(!isfinite(x)||!isfinite(y)||fabsf(x)>1 || fabsf(y)>1)continue;
+        float diameter=surface?.035f:.017f;
+        float width=fmaxf(3,g_eye_width*.5f*proj[0]*diameter/w);
+        float height=fmaxf(3,g_eye_height*.5f*proj[5]*diameter/w);
+        D3D11_VIEWPORT viewport={(x+1)*.5f*g_eye_width-width*.5f,
+            (1-y)*.5f*g_eye_height-height*.5f,width,height,surface?.75f:0,1};
+        ID3D11DeviceContext_RSSetViewports(probe_context,1,&viewport);
+        ID3D11DeviceContext_OMSetRenderTargets(probe_context,1,&g_proj_rtvs[index][i],NULL);
+        ID3D11DeviceContext_Draw(probe_context,3,0);
+    }
+}
+static void draw_controller_markers(UINT index,XrTime time,const XrView* eyes){
+    if(!marker_ps || !g_eye_copy_vs || (!show_hands && !show_contact))return;
+    ID3D11DeviceContext_IASetInputLayout(probe_context,NULL);
+    ID3D11DeviceContext_IASetPrimitiveTopology(probe_context,D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    ID3D11DeviceContext_VSSetShader(probe_context,g_eye_copy_vs,NULL,0);
+    ID3D11DeviceContext_PSSetShader(probe_context,marker_ps,NULL,0);
+    XrSpace hands[]={g_world_grip_space,g_panel_grip_space};
+    XrSpaceLocationFlags required=XR_SPACE_LOCATION_POSITION_VALID_BIT|XR_SPACE_LOCATION_POSITION_TRACKED_BIT;
+    if(show_hands)for(UINT h=0;h<2;++h){
+        XrSpaceLocation loc={.type=XR_TYPE_SPACE_LOCATION};
+        if(hands[h] && XR_SUCCEEDED(pxrLocateSpace(hands[h],g_space,time,&loc)) &&
+            (loc.locationFlags&required)==required)draw_hand_sphere(index,eyes,loc.pose.position);
+    }
+    ID3D11DeviceContext_VSSetShader(probe_context,g_eye_copy_vs,NULL,0);
+    ID3D11DeviceContext_PSSetShader(probe_context,marker_ps,NULL,0);
+    if(!contact_consent || !contact_enabled || !show_contact || g_aux_panel_visible || !TryAcquireSRWLockShared(&contact_lock))return;
+    ContactTargets visible_targets[2];memcpy(visible_targets,targets,sizeof targets);
+    HandContact snapshot[2];memcpy(snapshot,contact,sizeof(snapshot));
+    ReleaseSRWLockShared(&contact_lock);
+    if(!g_tracking_space)return;
+    XrSpaceLocation loc={.type=XR_TYPE_SPACE_LOCATION};
+    required=XR_SPACE_LOCATION_POSITION_VALID_BIT|XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
+    if(XR_FAILED(pxrLocateSpace(g_tracking_space,g_space,time,&loc)) || (loc.locationFlags&required)!=required)return;
+    int drawn_body=0;
+    for(unsigned h=0;h<2;h++){
+        ContactTargets* marks=&visible_targets[h];
+        if(!marks->body || marks->body==drawn_body || marks->gen!=xr_frame_telemetry.generation ||
+           snapshot[h].gen!=marks->gen || GetTickCount64()-marks->tick>240)continue;
+        for(int i=0;i<marks->count;i++)
+            draw_space_marker(index,eyes,transform_panel_point(&loc.pose,marks->points[i]),FALSE);
+        drawn_body=marks->body;
+    }
+    for(unsigned i=0;i<2;++i){
+        const HandContact* hand=&snapshot[i];
+        if(hand->gen<=0 || hand->gen!=hand->surface_gen || hand->gen!=xr_frame_telemetry.generation ||
+           GetTickCount64()-hand->surface_tick>160)continue;
+        for(int k=0;k<CONTACT_MAX_TARGETS;k++)if(hand->surface_mask&(1u<<k)){
+            draw_space_marker(index,eyes,transform_panel_point(&loc.pose,hand->surface_local[k]),TRUE);
+        }
+    }
+}
+
+/* Original auxiliary placement: follow grip translation; keep the surface readable as the wrist rotates. */
+static BOOL panel_hand_mount(XrTime time,XrPosef* out){
+    XrSpaceLocation grip={.type=XR_TYPE_SPACE_LOCATION};
+    XrSpaceLocationFlags valid=XR_SPACE_LOCATION_POSITION_VALID_BIT|XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
+    if(!g_panel_grip_space || !g_space || XR_FAILED(pxrLocateSpace(g_panel_grip_space,g_space,time,&grip)) ||
+       (grip.locationFlags&valid)!=valid)return FALSE;
+    *out=(XrPosef){.orientation.w=1,.position=grip.pose.position};
+    out->position.y+=AUX_PANEL_UP_OFFSET_M;
+    out->position.z-=AUX_PANEL_FORWARD_OFFSET_M;
+    return TRUE;
+}
+#include "vr_scale_menu.h"
 
 static BOOL sync_controller_actions(void) {
     if (!g_controller_actions_ready ||
@@ -3404,6 +4352,7 @@ static BOOL update_aux_panel_state(XrTime display_time, BOOL immersive_active,
             &grip_active, &grip_value)) {
         g_aux_panel_visible = FALSE;
         g_panel_grip_was_down = FALSE;
+        panel_short_armed = FALSE;
         release_synthetic_input();
         return FALSE;
     }
@@ -3412,6 +4361,7 @@ static BOOL update_aux_panel_state(XrTime display_time, BOOL immersive_active,
         if (g_aux_panel_visible) release_synthetic_input();
         g_aux_panel_visible = FALSE;
         g_panel_grip_was_down = grip_down;
+        panel_short_armed = FALSE;
         return FALSE;
     }
     XrSpaceLocation location; ZeroMemory(&location, sizeof(location));
@@ -3420,12 +4370,15 @@ static BOOL update_aux_panel_state(XrTime display_time, BOOL immersive_active,
         XR_SPACE_LOCATION_ORIENTATION_VALID_BIT | XR_SPACE_LOCATION_POSITION_VALID_BIT;
     BOOL pose_valid = XR_SUCCEEDED(pxrLocateSpace(g_panel_grip_space, g_space,
         display_time, &location)) && (location.locationFlags & required) == required;
-    if (grip_down && !g_panel_grip_was_down && pose_valid) {
+    if (!pose_valid || !grip_active) panel_short_armed=FALSE;
+    if (grip_down && !g_panel_grip_was_down && pose_valid) panel_short_armed=TRUE;
+    if (!grip_down && g_panel_grip_was_down && panel_short_armed && pose_valid) {
+        panel_short_armed=FALSE;
         g_aux_panel_visible = !g_aux_panel_visible;
         g_pointer_logged = FALSE;
         if (!g_aux_panel_visible) release_synthetic_input();
         char detail[160];
-        snprintf(detail, sizeof(detail),
+        telemetry_snprintf(detail, sizeof(detail),
             "\"status\":\"%s\",\"panel_hand\":\"%s\"",
             g_aux_panel_visible ? "visible" : "hidden",
             controller_hands_swapped ? "right" : "left");
@@ -3433,12 +4386,7 @@ static BOOL update_aux_panel_state(XrTime display_time, BOOL immersive_active,
     }
     g_panel_grip_was_down = grip_down;
     if (!g_aux_panel_visible || !pose_valid || !out_pose) return FALSE;
-    ZeroMemory(out_pose, sizeof(*out_pose));
-    out_pose->orientation.w = 1.0f;
-    out_pose->position = location.pose.position;
-    out_pose->position.y += AUX_PANEL_UP_OFFSET_M;
-    out_pose->position.z -= AUX_PANEL_FORWARD_OFFSET_M;
-    return TRUE;
+    return panel_hand_mount(display_time,out_pose);
 }
 
 static void update_controller_input(XrTime display_time, BOOL panel_active,
@@ -3497,7 +4445,7 @@ static void update_controller_input(XrTime display_time, BOOL panel_active,
     if (pointer_valid && !g_pointer_logged) {
         g_pointer_logged = TRUE;
         char detail[192];
-        snprintf(detail, sizeof(detail),
+        telemetry_snprintf(detail, sizeof(detail),
             "\"status\":\"observed\",\"pointer_hand\":\"%s\",\"panel\":\"%s\"",
             controller_hands_swapped ? "left" : "right",
             auxiliary_panel ? "auxiliary_immersive" : "primary_flat");
@@ -3538,13 +4486,13 @@ static void update_controller_input(XrTime display_time, BOOL panel_active,
 static BOOL build_draw_pipeline(char* detail, size_t detail_chars) {
     write_record("CAP-009", "pipe_stage", "\"stage\":\"enter\"");
     if (!g_vs_blob || !g_ps_blob || !g_panel_ps_blob || !g_vs_dbg_blob || !g_ps_solid_blob || !g_eye_copy_vs_blob) {
-        snprintf(detail, detail_chars, "\"stage\":\"blobs_missing\"");
+        telemetry_snprintf(detail, detail_chars, "\"stage\":\"blobs_missing\"");
         return FALSE;
     }
     write_record("CAP-009", "pipe_stage", "\"stage\":\"using_precompiled_blobs\"");
     {
         char ptrs[384];
-        snprintf(ptrs, sizeof(ptrs),
+        telemetry_snprintf(ptrs, sizeof(ptrs),
             "\"ptrs\":{\"device\":\"%p\",\"vs_blob\":\"%p\",\"ps_blob\":\"%p\","
             "\"vs_dbg_blob\":\"%p\",\"ps_solid_blob\":\"%p\"}",
             (void*)probe_device, (void*)g_vs_blob, (void*)g_ps_blob,
@@ -3575,6 +4523,11 @@ static BOOL build_draw_pipeline(char* detail, size_t detail_chars) {
         hr = ID3D11Device_CreateVertexShader(probe_device,
             ID3D10Blob_GetBufferPointer(g_vs_dbg_blob), ID3D10Blob_GetBufferSize(g_vs_dbg_blob), NULL, &g_vs_dbg);
     write_record("CAP-009", "pipe_stage", "\"stage\":\"vs_dbg_created\"");
+    if(sphere_vs_blob && !sphere_vs)(void)ID3D11Device_CreateVertexShader(probe_device,ID3D10Blob_GetBufferPointer(sphere_vs_blob),ID3D10Blob_GetBufferSize(sphere_vs_blob),NULL,&sphere_vs);
+    if(sphere_ps_blob && !sphere_ps)(void)ID3D11Device_CreatePixelShader(probe_device,ID3D10Blob_GetBufferPointer(sphere_ps_blob),ID3D10Blob_GetBufferSize(sphere_ps_blob),NULL,&sphere_ps);
+    if (marker_blob && !marker_ps)
+        (void)ID3D11Device_CreatePixelShader(probe_device,ID3D10Blob_GetBufferPointer(marker_blob),
+            ID3D10Blob_GetBufferSize(marker_blob),NULL,&marker_ps);
     if (SUCCEEDED(hr))
         hr = ID3D11Device_CreatePixelShader(probe_device,
             ID3D10Blob_GetBufferPointer(g_ps_solid_blob), ID3D10Blob_GetBufferSize(g_ps_solid_blob), NULL, &g_ps_solid);
@@ -3583,7 +4536,7 @@ static BOOL build_draw_pipeline(char* detail, size_t detail_chars) {
         hr = ID3D11Device_CreateVertexShader(probe_device,
             ID3D10Blob_GetBufferPointer(g_eye_copy_vs_blob), ID3D10Blob_GetBufferSize(g_eye_copy_vs_blob),
             NULL, &g_eye_copy_vs);
-    if (FAILED(hr)) { snprintf(detail, detail_chars, "\"stage\":\"shader_create\",\"hr\":%ld", (long)hr); return FALSE; }
+    if (FAILED(hr)) { telemetry_snprintf(detail, detail_chars, "\"stage\":\"shader_create\",\"hr\":%ld", (long)hr); return FALSE; }
 
     /* panel quad: dynamic VB, aspect-corrected per frame from the captured
        game frame dimensions (portrait 852x1514 must not be squeezed) */
@@ -3598,7 +4551,7 @@ static BOOL build_draw_pipeline(char* detail, size_t detail_chars) {
     vb_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
     D3D11_SUBRESOURCE_DATA vb_data = { verts, 0, 0 };
     hr = ID3D11Device_CreateBuffer(probe_device, &vb_desc, &vb_data, &g_vb);
-    if (FAILED(hr)) { snprintf(detail, detail_chars, "\"stage\":\"vb\",\"hr\":%ld", (long)hr); return FALSE; }
+    if (FAILED(hr)) { telemetry_snprintf(detail, detail_chars, "\"stage\":\"vb\",\"hr\":%ld", (long)hr); return FALSE; }
 
     D3D11_BUFFER_DESC cb_desc; ZeroMemory(&cb_desc, sizeof(cb_desc));
     cb_desc.ByteWidth = 64;
@@ -3606,7 +4559,7 @@ static BOOL build_draw_pipeline(char* detail, size_t detail_chars) {
     cb_desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
     cb_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
     hr = ID3D11Device_CreateBuffer(probe_device, &cb_desc, NULL, &g_cb);
-    if (FAILED(hr)) { snprintf(detail, detail_chars, "\"stage\":\"cb\",\"hr\":%ld", (long)hr); return FALSE; }
+    if (FAILED(hr)) { telemetry_snprintf(detail, detail_chars, "\"stage\":\"cb\",\"hr\":%ld", (long)hr); return FALSE; }
 
     D3D11_SAMPLER_DESC sdesc; ZeroMemory(&sdesc, sizeof(sdesc));
     sdesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
@@ -3614,13 +4567,13 @@ static BOOL build_draw_pipeline(char* detail, size_t detail_chars) {
     sdesc.ComparisonFunc = D3D11_COMPARISON_NEVER;
     sdesc.MaxLOD = D3D11_FLOAT32_MAX;
     hr = ID3D11Device_CreateSamplerState(probe_device, &sdesc, &g_sampler);
-    if (FAILED(hr)) { snprintf(detail, detail_chars, "\"stage\":\"sampler\",\"hr\":%ld", (long)hr); return FALSE; }
+    if (FAILED(hr)) { telemetry_snprintf(detail, detail_chars, "\"stage\":\"sampler\",\"hr\":%ld", (long)hr); return FALSE; }
     /* the projected quad can wind either way depending on eye/pose; never cull */
     D3D11_RASTERIZER_DESC rdesc; ZeroMemory(&rdesc, sizeof(rdesc));
     rdesc.FillMode = D3D11_FILL_SOLID;
     rdesc.CullMode = D3D11_CULL_NONE;
     hr = ID3D11Device_CreateRasterizerState(probe_device, &rdesc, &g_raster);
-    if (FAILED(hr)) { snprintf(detail, detail_chars, "\"stage\":\"raster\",\"hr\":%ld", (long)hr); return FALSE; }
+    if (FAILED(hr)) { telemetry_snprintf(detail, detail_chars, "\"stage\":\"raster\",\"hr\":%ld", (long)hr); return FALSE; }
     return TRUE;
 }
 
@@ -3639,6 +4592,9 @@ static BOOL compile_all_shaders(void) {
     if (SUCCEEDED(hr)) hr = compile(g_ps_src, strlen(g_ps_src), NULL, NULL, NULL, "main", "ps_5_0", 0, 0, (void**)&g_ps_blob);
     if (SUCCEEDED(hr)) hr = compile(g_panel_ps_src, strlen(g_panel_ps_src), NULL, NULL, NULL, "main", "ps_5_0", 0, 0, (void**)&g_panel_ps_blob);
     if (SUCCEEDED(hr)) hr = compile(g_vs_dbg_src, strlen(g_vs_dbg_src), NULL, NULL, NULL, "main", "vs_5_0", 0, 0, (void**)&g_vs_dbg_blob);
+    if(!sphere_vs_blob)(void)compile(sphere_vertex_shader,strlen(sphere_vertex_shader),NULL,NULL,NULL,"main","vs_5_0",0,0,(void**)&sphere_vs_blob);
+    if(!sphere_ps_blob)(void)compile(sphere_pixel_shader,strlen(sphere_pixel_shader),NULL,NULL,NULL,"main","ps_5_0",0,0,(void**)&sphere_ps_blob);
+    if (!marker_blob) (void)compile(marker_shader,strlen(marker_shader),NULL,NULL,NULL,"main","ps_5_0",0,0,(void**)&marker_blob);
     if (SUCCEEDED(hr)) hr = compile(g_ps_solid_src, strlen(g_ps_solid_src), NULL, NULL, NULL, "main", "ps_5_0", 0, 0, (void**)&g_ps_solid_blob);
     if (SUCCEEDED(hr)) hr = compile(g_eye_copy_vs_src, strlen(g_eye_copy_vs_src), NULL, NULL, NULL, "main", "vs_5_0", 0, 0, (void**)&g_eye_copy_vs_blob);
     /* NEVER FreeLibrary the compiler: the returned blobs' vtables live in
@@ -3649,22 +4605,61 @@ static BOOL compile_all_shaders(void) {
 
 /* ---------------- XR worker ---------------- */
 
+/* The session thread owns all LOCAL handles. Keep each change until the first
+   locate at or after its time, including multiple announcements in one poll. */
+typedef struct LocalChange {
+    struct LocalChange* next;
+    XrTime time;
+    BOOL valid;
+    XrPosef new_in_old;
+} LocalChange;
+
+static BOOL queue_local_change(LocalChange** head,const XrEventDataReferenceSpaceChangePending* event) {
+    LocalChange* item=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,sizeof(*item));
+    if (!item) return FALSE;
+    item->time=event->changeTime;
+    item->valid=event->poseValid;
+    if (item->valid) item->new_in_old=event->poseInPreviousSpace;
+    while (*head && (*head)->time<=item->time) head=&(*head)->next;
+    item->next=*head;
+    *head=item;
+    return TRUE;
+}
+
+static BOOL offset_after_change(XrPosef prior,XrPosef delta,XrPosef* next) {
+    XrQuaternionf q=delta.orientation, p=prior.orientation;
+    float norm=q.x*q.x+q.y*q.y+q.z*q.z+q.w*q.w;
+    if (!isfinite(norm) || fabsf(norm-1.f)>.01f) return FALSE;
+    Quat inverse=quat_conjugate((Quat){q.x,q.y,q.z,q.w});
+    Vec3 v=quat_rotate(inverse,(Vec3){prior.position.x-delta.position.x,
+        prior.position.y-delta.position.y,prior.position.z-delta.position.z});
+    if (!isfinite(v.x)||!isfinite(v.y)||!isfinite(v.z)) return FALSE;
+    Quat r=quat_multiply(inverse,(Quat){p.x,p.y,p.z,p.w});
+    *next=(XrPosef){{r.x,r.y,r.z,r.w},{v.x,v.y,v.z}};
+    return TRUE;
+}
+
+enum { XR_RUN_DONE, XR_RUN_LOST, XR_RUN_UNAVAILABLE };
+static BOOL lost_xr(XrResult result){
+    return result==XR_ERROR_INSTANCE_LOST || result==XR_ERROR_SESSION_LOST || result==XR_SESSION_LOSS_PENDING;
+}
 static DWORD WINAPI xr_worker(LPVOID unused) {
     (void)unused;
-    HMODULE loader = NULL;
+    static HMODULE loader;
     WCHAR loader_path[MAX_PATH];
     if (!find_loader_dll(loader_path, MAX_PATH)) {
         write_disabled("openxr_loader_not_found", NULL);
         return 0;
     }
-    loader = LoadLibraryW(loader_path);
+    if (!loader) loader = LoadLibraryW(loader_path);
     if (!loader) {
         char extra[320];
         char escaped[MAX_PATH * 2];
-        char narrow[MAX_PATH];
-        WideCharToMultiByte(CP_UTF8, 0, loader_path, -1, narrow, MAX_PATH, NULL, NULL);
+        char narrow[MAX_PATH] = {0};
+        if (!WideCharToMultiByte(CP_UTF8, 0, loader_path, -1, narrow, MAX_PATH, NULL, NULL))
+            memcpy(narrow, "[path_too_long]", sizeof("[path_too_long]"));
         json_escape(narrow, escaped, sizeof(escaped));
-        snprintf(extra, sizeof(extra), "\"loader_last_error\":%lu,\"loader_path\":\"%s\"",
+        telemetry_snprintf(extra, sizeof(extra), "\"loader_last_error\":%lu,\"loader_path\":\"%s\"",
             GetLastError(), escaped);
         write_disabled("openxr_loader_load_failed", extra);
         return 0;
@@ -3691,7 +4686,7 @@ static DWORD WINAPI xr_worker(LPVOID unused) {
     XrResult result = pxrCreateInstance(&ici, &state.instance);
     if (XR_FAILED(result)) {
         log_xr_result(XR_NULL_HANDLE, "xrCreateInstance", result);
-        return 0;
+        return result==XR_ERROR_RUNTIME_UNAVAILABLE || lost_xr(result)?XR_RUN_UNAVAILABLE:XR_RUN_DONE;
     }
     state.instance_alive = TRUE;
     create_controller_actions(state.instance);
@@ -3702,7 +4697,7 @@ static DWORD WINAPI xr_worker(LPVOID unused) {
     if (XR_SUCCEEDED(pxrGetInstanceProperties(state.instance, &props))) {
         char escaped_name[XR_MAX_RUNTIME_NAME_SIZE * 2];
         json_escape(props.runtimeName, escaped_name, sizeof(escaped_name));
-        snprintf(detail, sizeof(detail),
+        telemetry_snprintf(detail, sizeof(detail),
             "\"status\":\"observed\",\"runtime_name\":\"%s\",\"runtime_version\":\"%u.%u.%u\"",
             escaped_name, XR_VERSION_MAJOR(props.runtimeVersion), XR_VERSION_MINOR(props.runtimeVersion),
             XR_VERSION_PATCH(props.runtimeVersion));
@@ -3716,13 +4711,13 @@ static DWORD WINAPI xr_worker(LPVOID unused) {
     if (XR_FAILED(result)) {
         log_xr_result(state.instance, "xrGetSystem", result);
         destroy_xr_state(&state);
-        return 0;
+        return result==XR_ERROR_FORM_FACTOR_UNAVAILABLE || lost_xr(result)?XR_RUN_UNAVAILABLE:XR_RUN_DONE;
     }
 
     XrSystemProperties sys_props; ZeroMemory(&sys_props, sizeof(sys_props));
     sys_props.type = XR_TYPE_SYSTEM_PROPERTIES;
     if (XR_SUCCEEDED(pxrGetSystemProperties(state.instance, state.system, &sys_props))) {
-        snprintf(detail, sizeof(detail),
+        telemetry_snprintf(detail, sizeof(detail),
             "\"status\":\"observed\",\"system_id\":\"%llu\",\"vendor_id\":%u,\"max_layers\":%u,"
             "\"orientation_tracking\":%d,\"position_tracking\":%d",
             (unsigned long long)sys_props.systemId, sys_props.vendorId,
@@ -3775,9 +4770,13 @@ static DWORD WINAPI xr_worker(LPVOID unused) {
         fallback_reason = "runtime_dimension_limit";
     }
     eye_render_scale = selected_scale;
+    scale_recommended_w=(LONG)recommended_eye_width; scale_recommended_h=(LONG)recommended_eye_height;
+    scale_max_width=(LONG)max_eye_width; scale_max_height=(LONG)max_eye_height;
+    InterlockedExchange(&scale_native,(LONG)lroundf(selected_scale*100));
+    InterlockedExchange(&scale_requested,scale_native);
     g_eye_width = selected_eye_width;
     g_eye_height = selected_eye_height;
-    snprintf(detail, sizeof(detail),
+    telemetry_snprintf(detail, sizeof(detail),
         "\"status\":\"%s\",\"requested_scale\":%.3f,\"selected_scale\":%.3f,"
         "\"recommended_width\":%u,\"recommended_height\":%u,"
         "\"selected_width\":%u,\"selected_height\":%u,"
@@ -3820,13 +4819,13 @@ static DWORD WINAPI xr_worker(LPVOID unused) {
 
     char device_detail[512];
     if (!create_probe_device(&requirements.adapterLuid, device_detail, sizeof(device_detail))) {
-        snprintf(detail, sizeof(detail), "\"status\":\"failed\",\"stage\":\"probe_device_creation\",%s",
+        telemetry_snprintf(detail, sizeof(detail), "\"status\":\"failed\",\"stage\":\"probe_device_creation\",%s",
             device_detail);
         write_record(PROBE_ID, "disabled", detail);
         destroy_xr_state(&state);
         return 0;
     }
-    snprintf(detail, sizeof(detail),
+    telemetry_snprintf(detail, sizeof(detail),
         "\"status\":\"observed\",\"runtime_adapter_luid\":\"%08lx-%08lx\",%s",
         (unsigned long)requirements.adapterLuid.HighPart, (unsigned long)requirements.adapterLuid.LowPart,
         device_detail);
@@ -3843,9 +4842,9 @@ static DWORD WINAPI xr_worker(LPVOID unused) {
     if (XR_FAILED(result)) {
         log_xr_result(state.instance, "xrCreateSession", result);
         destroy_xr_state(&state);
-        return 0;
+        return lost_xr(result)?XR_RUN_UNAVAILABLE:XR_RUN_DONE;
     }
-    snprintf(detail, sizeof(detail),
+    telemetry_snprintf(detail, sizeof(detail),
         "\"status\":\"observed\",\"bound_device\":\"%p\",\"device_owner\":\"probe_isolated\"",
         (void*)probe_device);
     write_record("CAP-005", "session_created", detail);
@@ -3874,11 +4873,17 @@ static DWORD WINAPI xr_worker(LPVOID unused) {
         destroy_xr_state(&state);
         return 0;
     }
-    snprintf(detail, sizeof(detail), "\"status\":\"observed\",\"stage\":\"draw_pipeline_ready\"");
+    telemetry_snprintf(detail, sizeof(detail), "\"status\":\"observed\",\"stage\":\"draw_pipeline_ready\"");
     write_record("CAP-009", "lifecycle_step", detail);
 
     ULONGLONG deadline = GetTickCount64() + (fast_mode ? 8000 : 300000);
     ULONGLONG begun_tick = 0;
+    BOOL runtime_lost=FALSE;
+    LocalChange* changes=NULL;
+    XrPosef local_offset={.orientation.w=1};
+    XrTime local_valid_since=0;
+    BOOL replace_space=FALSE, reseed_local=FALSE;
+    XrTime space_retry=0;
     BOOL exit_requested = FALSE;
     BOOL running = TRUE;
     while (running) {
@@ -3887,13 +4892,22 @@ static DWORD WINAPI xr_worker(LPVOID unused) {
         XrResult poll = pxrPollEvent(state.instance, &event_data);
         while (poll == XR_SUCCESS) {
             switch (event_data.type) {
+                case XR_TYPE_EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING: {
+                    const XrEventDataReferenceSpaceChangePending* change=(const void*)&event_data;
+                    if (change->session==g_session && change->referenceSpaceType==XR_REFERENCE_SPACE_TYPE_LOCAL &&
+                        !queue_local_change(&changes,change)) {
+                        write_disabled("reference_change_queue_allocation",NULL);
+                        running=FALSE;
+                    }
+                    break;
+                }
                 case XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED: {
                     XrEventDataSessionStateChanged* changed =
                         (XrEventDataSessionStateChanged*)(void*)&event_data;
                     g_session_state = (int)changed->state;
                     if (changed->state != XR_SESSION_STATE_FOCUSED)
                         release_synthetic_input();
-                    snprintf(detail, sizeof(detail),
+                    telemetry_snprintf(detail, sizeof(detail),
                         "\"status\":\"observed\",\"session_state\":%d,\"time_ns\":%lld",
                         g_session_state, (long long)changed->time);
                     write_record("CAP-005", "session_state_changed", detail);
@@ -3938,11 +4952,13 @@ static DWORD WINAPI xr_worker(LPVOID unused) {
                         g_begun = FALSE;
                     } else if (changed->state == XR_SESSION_STATE_EXITING ||
                                changed->state == XR_SESSION_STATE_LOSS_PENDING) {
+                        runtime_lost=changed->state==XR_SESSION_STATE_LOSS_PENDING;
                         running = FALSE;
                     }
                     break;
                 }
                 case XR_TYPE_EVENT_DATA_INSTANCE_LOSS_PENDING:
+                    runtime_lost=TRUE;
                     running = FALSE;
                     break;
                 default:
@@ -3953,7 +4969,8 @@ static DWORD WINAPI xr_worker(LPVOID unused) {
             event_data.type = XR_TYPE_EVENT_DATA_BUFFER;
             poll = pxrPollEvent(state.instance, &event_data);
         }
-        if (!running || GetTickCount64() > deadline) {
+        if(lost_xr(poll)){runtime_lost=TRUE;break;}
+        if (!running || (!begun_tick && GetTickCount64() > deadline)) {
             if (running) write_disabled("session_not_ready_timeout", NULL);
             break;
         }
@@ -3974,24 +4991,72 @@ static DWORD WINAPI xr_worker(LPVOID unused) {
         fwi.type = XR_TYPE_FRAME_WAIT_INFO;
         XrFrameState fs; ZeroMemory(&fs, sizeof(fs));
         fs.type = XR_TYPE_FRAME_STATE;
-        if (XR_FAILED(pxrWaitFrame(g_session, &fwi, &fs))) {
+        XrResult wait_result=pxrWaitFrame(g_session,&fwi,&fs);
+        if(lost_xr(wait_result)){runtime_lost=TRUE;break;}
+        if (XR_FAILED(wait_result)) {
             write_disabled("xrWaitFrame", NULL);
             break;
         }
+        if(!local_valid_since)local_valid_since=fs.predictedDisplayTime;
+        while (changes && changes->time<=fs.predictedDisplayTime) {
+            LocalChange* due=changes;
+            changes=due->next;
+            if (!due->valid || !offset_after_change(local_offset,due->new_in_old,&local_offset)) {
+                local_offset=(XrPosef){.orientation.w=1};
+                reseed_local=TRUE;
+            }
+            HeapFree(GetProcessHeap(),0,due);
+            local_valid_since=fs.predictedDisplayTime;
+            replace_space=TRUE;
+            space_retry=0;
+        }
+        if (replace_space && fs.predictedDisplayTime>=space_retry) {
+            if (g_tracking_space) { pxrDestroySpace(g_tracking_space); g_tracking_space=XR_NULL_HANDLE; }
+            XrReferenceSpaceCreateInfo info={.type=XR_TYPE_REFERENCE_SPACE_CREATE_INFO,
+                .referenceSpaceType=XR_REFERENCE_SPACE_TYPE_LOCAL,.poseInReferenceSpace=local_offset};
+            XrResult replaced=pxrCreateReferenceSpace(g_session,&info,&g_tracking_space);
+            if (XR_FAILED(replaced)) {
+                g_tracking_space=XR_NULL_HANDLE;
+                InterlockedExchange(&eye_optics_ready,0);
+                space_retry=fs.predictedDisplayTime+1000000000;
+                log_xr_result(state.instance,"rebaseTrackingSpace",replaced);
+            } else {
+                replace_space=FALSE;
+                write_record("POSE","local_space_rebased",reseed_local?"\"reseed\":true":"\"reseed\":false");
+            }
+            g_world_grab=(WorldGrab){0};
+            g_return_button=(ReturnButton){0};
+            AcquireSRWLockExclusive(&contact_lock);
+            ZeroMemory(&contact,sizeof(contact));
+            ReleaseSRWLockExclusive(&contact_lock);
+            if(reseed_local) InterlockedExchange(&eye_optics_ready,0);
+        }
         XrFrameBeginInfo fbi; ZeroMemory(&fbi, sizeof(fbi));
         fbi.type = XR_TYPE_FRAME_BEGIN_INFO;
-        if (XR_FAILED(pxrBeginFrame(g_session, &fbi))) {
+        XrResult begin_result=pxrBeginFrame(g_session,&fbi);
+        if(lost_xr(begin_result)){runtime_lost=TRUE;break;}
+        if (XR_FAILED(begin_result)) {
             write_disabled("xrBeginFrame", NULL);
             break;
         }
 
+        ZeroMemory(&xr_frame_telemetry, sizeof(xr_frame_telemetry));
+        xr_frame_telemetry.frame_id = ++xr_observed_frame_id;
+        xr_frame_telemetry.predicted_time = fs.predictedDisplayTime;
+
         BOOL visible = g_session_state == (int)XR_SESSION_STATE_VISIBLE ||
                        g_session_state == (int)XR_SESSION_STATE_FOCUSED;
         BOOL actions_synced = sync_controller_actions();
+        if(!actions_synced || g_session_state!=(int)XR_SESSION_STATE_FOCUSED)g_follow_armed=FALSE;
+        else if(camera_click_edge(g_follow_click,g_right_hand_path,&g_follow_armed)){
+            LONG token=toggle_camera_follow(InterlockedCompareExchange(&camera_follow_default_on,0,0));
+            write_record("POSE-002","camera_follow_click",token&1?"\"stage\":\"frozen\"":"\"stage\":\"following\"");
+        }
         BOOL navigation_updated = FALSE;
         uint32_t layer_count = 0;
         BOOL controller_panel_active = FALSE;
         BOOL controller_panel_auxiliary = FALSE;
+        BOOL fresh_pose = FALSE;
         float controller_panel_width = 0.0f, controller_panel_height = 0.0f;
         XrPosef controller_panel_pose; ZeroMemory(&controller_panel_pose, sizeof(controller_panel_pose));
         controller_panel_pose.orientation.w = 1.0f;
@@ -4047,13 +5112,24 @@ static DWORD WINAPI xr_worker(LPVOID unused) {
                             eye_optics.fov[0] = located[0].fov;
                             eye_optics.fov[1] = located[1].fov;
                             eye_optics.half_ipd_m = half_ipd;
+                            fresh_pose = (tracking_state.viewStateFlags & (XR_VIEW_STATE_POSITION_TRACKED_BIT|XR_VIEW_STATE_ORIENTATION_TRACKED_BIT)) ==
+                                (XR_VIEW_STATE_POSITION_TRACKED_BIT|XR_VIEW_STATE_ORIENTATION_TRACKED_BIT);
+                            if(reseed_local && fresh_pose){
+                                eye_optics.origin_center=center;
+                                eye_optics.origin_center.orientation=(XrQuaternionf){0,0,0,1};
+                                eye_optics.origin_valid=TRUE;
+                                immersive_entry_origin_committed=TRUE;
+                                eye_optics.return_orientation_valid=FALSE;
+                                reseed_local=FALSE;
+                            }
+                            eye_optics.render_views=(HomeRenderViews){.eye={tracking_views[0].pose,tracking_views[1].pose},.space=g_tracking_space,.time=fs.predictedDisplayTime};
                             eye_optics.current_center = center;
                             if (!eye_optics.origin_valid) {
                                 eye_optics.origin_center = center;
                                 eye_optics.origin_valid = TRUE;
                             }
                             ReleaseSRWLockExclusive(&eye_optics_lock);
-                            InterlockedExchange(&eye_optics_ready, 1);
+                            InterlockedExchange(&eye_optics_ready, !reseed_local);
                         }
                     }
                 }
@@ -4083,43 +5159,70 @@ static DWORD WINAPI xr_worker(LPVOID unused) {
                             v->fov = located[eye].fov;
                         }
                         BOOL immersive_drawn = copy_fresh_eye_pair_to_projection(pidx);
-                        update_controller_navigation(fs.predictedDisplayTime,
-                            immersive_drawn, actions_synced);
-                        navigation_updated = TRUE;
-                        XrPosef auxiliary_panel_pose;
-                        BOOL auxiliary_panel_presented = update_aux_panel_state(
-                            fs.predictedDisplayTime, immersive_drawn, actions_synced,
-                            &auxiliary_panel_pose);
                         BOOL desktop_mirror_ready = open_shared_on_probe_device();
                         /* Refresh a probe-owned latest-complete-frame cache without
                            blocking either render loop. Draws never retain the shared
                            keyed mutex and can reuse the previous complete frame. */
                         BOOL panel_drawn = FALSE;
-                        if (desktop_mirror_ready && (!immersive_drawn || auxiliary_panel_presented) &&
-                                g_panel_srv && g_vs && g_panel_ps && g_il && g_vb &&
-                                g_cb && g_sampler && g_raster) {
-                            BOOL refreshed = FALSE;
-                            if (!km_enabled || !g_shared_km_probe) {
-                                ID3D11DeviceContext_CopyResource(probe_context,
-                                    (ID3D11Resource*)g_panel_tex, (ID3D11Resource*)g_local_shared_tex);
-                                refreshed = TRUE;
-                            } else if (SUCCEEDED(IDXGIKeyedMutex_AcquireSync(g_shared_km_probe, 1, 0))) {
-                                ID3D11DeviceContext_CopyResource(probe_context,
-                                    (ID3D11Resource*)g_panel_tex, (ID3D11Resource*)g_local_shared_tex);
-                                IDXGIKeyedMutex_ReleaseSync(g_shared_km_probe, 0);
-                                refreshed = TRUE;
+                        /* Drain even while Home is immersive. Otherwise key 1 can
+                           hold a pre-menu frame for the entire immersive interval. */
+                        BOOL refreshed=FALSE;
+                        if(desktop_mirror_ready && g_panel_tex && g_local_shared_tex &&
+                           (!km_enabled || (g_shared_km_probe &&
+                            IDXGIKeyedMutex_AcquireSync(g_shared_km_probe,1,0)==S_OK))){
+                            ID3D11DeviceContext_CopyResource(probe_context,
+                                (ID3D11Resource*)g_panel_tex,(ID3D11Resource*)g_local_shared_tex);
+                            refreshed=!km_enabled || IDXGIKeyedMutex_ReleaseSync(g_shared_km_probe,0)==S_OK;
+                            if(refreshed) InterlockedExchange(&g_panel_frame_ready,1);
+                        }
+                        if(menu_prefer_panel(immersive_drawn,desktop_mirror_ready,refreshed) && immersive_drawn){
+                            immersive_drawn=FALSE;
+                            for(uint32_t eye=0;eye<located_count && eye<MAX_EYES;eye++)
+                                ID3D11DeviceContext_ClearRenderTargetView(probe_context,g_proj_rtvs[pidx][eye],bg);
+                        }
+                        XrSpace submission_space=g_space;
+                        if(immersive_drawn && xr_cache_telemetry.owned && g_tracking_space &&
+                           home_cached_views.space==g_tracking_space && home_cached_views.time>=local_valid_since){
+                            XrSpaceLocation local_in_view={.type=XR_TYPE_SPACE_LOCATION};
+                            XrSpaceLocationFlags valid=XR_SPACE_LOCATION_POSITION_VALID_BIT|XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
+                            if(XR_SUCCEEDED(pxrLocateSpace(g_tracking_space,g_space,fs.predictedDisplayTime,&local_in_view)) &&
+                               (local_in_view.locationFlags&valid)==valid){
+                                submission_space=g_tracking_space;
+                                xr_frame_telemetry.render_pose_time=home_cached_views.time;
+                                for(UINT e=0;e<2;e++){
+                                    XrPosef captured=home_cached_views.eye[e];
+                                    proj_views[e].pose=captured;
+                                    proj_views[e].fov=located[e].fov=home_cached_views.fov[e];
+                                    located[e].pose.position=transform_panel_point(&local_in_view.pose,captured.position);
+                                    XrQuaternionf a=local_in_view.pose.orientation,b=captured.orientation;
+                                    Quat q=quat_multiply((Quat){a.x,a.y,a.z,a.w},(Quat){b.x,b.y,b.z,b.w});
+                                    located[e].pose.orientation=(XrQuaternionf){q.x,q.y,q.z,q.w};
+                                }
                             }
-                            if (refreshed) InterlockedExchange(&g_panel_frame_ready, 1);
+                        }
+                        scale_menu_input(fs.predictedDisplayTime,immersive_drawn && fresh_pose,actions_synced && g_session_state==(int)XR_SESSION_STATE_FOCUSED);
+                        update_controller_navigation(fs.predictedDisplayTime,
+                            immersive_drawn && !scale_menu.open && !scale_menu.swallow, actions_synced, fresh_pose);
+                        navigation_updated = TRUE;
+                        XrPosef auxiliary_panel_pose;
+                        BOOL auxiliary_panel_presented = update_aux_panel_state(
+                            fs.predictedDisplayTime, immersive_drawn && !scale_menu.open, actions_synced,
+                            &auxiliary_panel_pose);
+                        BOOL settings_panel=scale_menu.open && scale_menu.tracked && scale_menu_label();
+                        if(settings_panel){auxiliary_panel_pose=scale_menu.pose;auxiliary_panel_presented=TRUE;}
+                        if ((settings_panel || (desktop_mirror_ready && g_panel_srv && (!immersive_drawn || auxiliary_panel_presented))) &&
+                                g_vs && g_panel_ps && g_il && g_vb &&
+                                g_cb && g_sampler && g_raster) {
                             /* FLAT and IMMERSIVE auxiliary presentation share the
                                same actual PC-visible desktop mirror. A replacement
                                generation is rejected until its handle/cache opens. */
-                            ID3D11ShaderResourceView* presented_panel_srv = g_panel_srv;
+                            ID3D11ShaderResourceView* presented_panel_srv = settings_panel?scale_menu.label:g_panel_srv;
                             ID3D11PixelShader* presented_panel_ps = g_panel_ps;
-                            UINT presented_panel_width = g_panel_width;
-                            UINT presented_panel_height = g_panel_height;
+                            UINT presented_panel_width = settings_panel?MENU_W:g_panel_width;
+                            UINT presented_panel_height = settings_panel?MENU_H:g_panel_height;
                             BOOL presented_panel_ready =
-                                InterlockedCompareExchange(&g_panel_frame_ready, 0, 0) != 0;
-                            if (auxiliary_panel_presented && immersive_drawn &&
+                                settings_panel || InterlockedCompareExchange(&g_panel_frame_ready, 0, 0) != 0;
+                            if (!settings_panel && auxiliary_panel_presented && immersive_drawn &&
                                     InterlockedCompareExchange(&g_aux_panel_source_logged, 1, 0) == 0)
                                 write_record("CTRL-002", "aux_panel_source_selected",
                                     "\"status\":\"observed\",\"source\":\"pc_visible_desktop_mirror\"," 
@@ -4129,8 +5232,8 @@ static DWORD WINAPI xr_worker(LPVOID unused) {
                                 update_aux_panel_vertices(&auxiliary_panel_pose,
                                     presented_panel_width, presented_panel_height,
                                     &panel_w, &panel_h) :
-                                update_panel_vertices(located, located_count, bb_width,
-                                    bb_height, &panel_w, &panel_h);
+                                update_panel_vertices(located, located_count, presented_panel_width,
+                                    presented_panel_height, &panel_w, &panel_h);
                             if (geometry_ready && presented_panel_ready) {
                                 UINT stride = 20, offset = 0;
                                 ID3D11DeviceContext_IASetPrimitiveTopology(probe_context,
@@ -4165,7 +5268,7 @@ static DWORD WINAPI xr_worker(LPVOID unused) {
                                         panel_drawn = TRUE;
                                         if (copied_frames_total == 0) {
                                             char vpbuf[256];
-                                            snprintf(vpbuf, sizeof(vpbuf),
+                                            telemetry_snprintf(vpbuf, sizeof(vpbuf),
                                                 "\"vp_diag\":[%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f]",
                                                 first_vp[0], first_vp[5], first_vp[10], first_vp[14],
                                                 first_vp[2], first_vp[6], first_vp[8], first_vp[9]);
@@ -4174,7 +5277,7 @@ static DWORD WINAPI xr_worker(LPVOID unused) {
                                     }
                                 }
                                 if (panel_drawn) {
-                                    controller_panel_active = TRUE;
+                                    controller_panel_active = !settings_panel;
                                     controller_panel_auxiliary = auxiliary_panel_presented;
                                     controller_panel_width = panel_w;
                                     controller_panel_height = panel_h;
@@ -4184,11 +5287,11 @@ static DWORD WINAPI xr_worker(LPVOID unused) {
                                        single owner for input and the HMD cursor. It
                                        intentionally trails ray sampling by one frame,
                                        preserving the trigger pre-press latch exactly. */
-                                    if (g_presented_pointer_valid && g_ps_solid &&
+                                    if ((settings_panel?scale_menu.hit:g_presented_pointer_valid) && g_ps_solid &&
                                             update_cursor_vertices(&controller_panel_pose,
                                                 panel_w, panel_h,
-                                                g_presented_pointer_u,
-                                                g_presented_pointer_v)) {
+                                                settings_panel?scale_menu.u:g_presented_pointer_u,
+                                                settings_panel?scale_menu.v:g_presented_pointer_v)) {
                                         ID3D11DeviceContext_PSSetShader(probe_context,
                                             g_ps_solid, NULL, 0);
                                         for (uint32_t eye = 0;
@@ -4221,7 +5324,7 @@ static DWORD WINAPI xr_worker(LPVOID unused) {
                                     }
                                     ++copied_frames_total;
                                     if (copied_frames_total == 1) {
-                                        snprintf(detail, sizeof(detail),
+                                        telemetry_snprintf(detail, sizeof(detail),
                                             "\"status\":\"observed\",\"first_draw_width\":%u,\"first_draw_height\":%u,"
                                             "\"panel_distance_m\":%.2f,\"panel_width_m\":%.3f,"
                                             "\"panel_height_m\":%.3f,\"placement\":\"viewer_locked\"",
@@ -4231,23 +5334,47 @@ static DWORD WINAPI xr_worker(LPVOID unused) {
                                 }
                             }
                         }
+                        static int prior_route=-1;
+                        int route=immersive_drawn?2:panel_drawn?1:0;
+                        if(route!=prior_route){
+                            const char* stage=route==2?"stereo_draw":route==1?"flat_draw":"clear_only";
+                            char status[300];
+                            telemetry_snprintf(status,sizeof status,"\"stage\":\"%s\",\"state\":%d,\"generation\":%ld,\"mirror_open\":%s,\"mirror_ready\":%s,\"width\":%u,\"height\":%u",
+                                stage,prior_route,(long)xr_desktop_mirror_generation,desktop_mirror_ready?"true":"false",
+                                g_panel_frame_ready?"true":"false",g_panel_width,g_panel_height);
+                            write_record("XR-PANEL","presentation_fallback",status);prior_route=route;
+                        }
                         XrSwapchainImageReleaseInfo rel; ZeroMemory(&rel, sizeof(rel));
                         rel.type = XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO;
-                        pxrReleaseSwapchainImage(g_swapchain_proj, &rel);
+                        if(immersive_drawn && actions_synced && fresh_pose && !scale_menu.open && !auxiliary_panel_presented &&
+                           g_session_state==(int)XR_SESSION_STATE_FOCUSED && located_count==2)
+                            draw_controller_markers(pidx,fs.predictedDisplayTime,located);
+                        XrResult release_result = pxrReleaseSwapchainImage(g_swapchain_proj, &rel);
+                        xr_frame_telemetry.release_called = TRUE;
+                        xr_frame_telemetry.release_result = (long)release_result;
                         proj.type = XR_TYPE_COMPOSITION_LAYER_PROJECTION;
                         proj.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
-                        proj.space = g_space;
+                        proj.space = submission_space;
                         proj.viewCount = located_count;
                         proj.views = proj_views;
                         layer_ptrs[layer_count++] = (const XrCompositionLayerBaseHeader*)&proj;
+                        xr_frame_telemetry.stereo_layer = immersive_drawn;
                     }
                 }
             }
         }
 
         if (!navigation_updated)
-            update_controller_navigation(fs.predictedDisplayTime, FALSE, actions_synced);
-        update_controller_input(fs.predictedDisplayTime, controller_panel_active,
+            update_controller_navigation(fs.predictedDisplayTime, FALSE, actions_synced, FALSE);
+        if (!navigation_updated) scale_cancel();
+        if (scale_menu.swallow) {
+            BOOL a=FALSE, primary=FALSE, back=FALSE;float trigger=0;
+            if (actions_synced && read_boolean_action(g_primary_face_action,&a,&primary) &&
+                read_boolean_action(g_secondary_face_action,&a,&back) &&
+                read_float_action(g_trigger_action,&a,&trigger) && !primary && !back && trigger<.35f)
+                scale_menu.swallow=FALSE;
+        }
+        update_controller_input(fs.predictedDisplayTime, controller_panel_active && !scale_menu.open && !scale_menu.swallow,
             controller_panel_width, controller_panel_height, &controller_panel_pose,
             actions_synced, controller_panel_auxiliary);
 
@@ -4258,6 +5385,28 @@ static DWORD WINAPI xr_worker(LPVOID unused) {
         fei.layerCount = layer_count;
         fei.layers = layer_count ? layer_ptrs : NULL;
         XrResult endr = pxrEndFrame(g_session, &fei);
+        if(lost_xr(endr)){runtime_lost=TRUE;break;}
+        xr_frame_telemetry.end_called = TRUE;
+        xr_frame_telemetry.layer_count = layer_count;
+        BOOL stereo_accepted=stereo_end_accepted(&xr_frame_telemetry, (long)endr);
+        cadence_step(stereo_accepted,xr_frame_telemetry.generation,
+            xr_cache_telemetry.owned?scale_native:xr_cache_telemetry.render_percent,
+            xr_cache_telemetry.owned,xr_frame_telemetry.pair_serial,fs.predictedDisplayTime);
+        if (stereo_accepted) {
+            ++stereo_end_accepted_total;
+            scale_menu_accept();
+            if (stereo_end_logged_generation != xr_frame_telemetry.generation) {
+                char frame_detail[768];
+                stereo_telemetry_detail(&xr_frame_telemetry, (long)endr, frame_detail, sizeof(frame_detail));
+                write_record("IMMERSIVE-SOURCE", "first_stereo_frame_end_accepted", frame_detail);
+                stereo_end_logged_generation = xr_frame_telemetry.generation;
+            }
+        } else if (XR_FAILED(endr) || (xr_frame_telemetry.eye_mask &&
+                (endr != XR_SUCCESS || xr_frame_telemetry.release_result != XR_SUCCESS))) {
+            char frame_detail[768];
+            stereo_telemetry_detail(&xr_frame_telemetry, (long)endr, frame_detail, sizeof(frame_detail));
+            write_record("IMMERSIVE-SOURCE", "stereo_frame_end_failed", frame_detail);
+        }
         if (XR_FAILED(endr)) {
             log_xr_result(state.instance, "xrEndFrame", endr);
             break;
@@ -4268,29 +5417,60 @@ static DWORD WINAPI xr_worker(LPVOID unused) {
         }
         ++g_submitted_frames;
         if ((g_submitted_frames % 900) == 0) {
-            snprintf(detail, sizeof(detail),
+            telemetry_snprintf(detail, sizeof(detail),
                 "\"status\":\"observed\",\"submitted_frames\":%llu,\"copied_frames\":%llu,"
-                "\"panel_drawn_frames\":%llu,\"immersive_frames\":%llu",
-                g_submitted_frames, produced_frames, copied_frames_total, immersive_frames_total);
+                "\"panel_drawn_frames\":%llu,\"immersive_frames\":%llu,\"scene_hooks\":%ld,\"scene_updates\":%ld,\"scene_home\":%ld,"
+                "\"scene_owner_updates\":%ld,\"scene_owner_home\":%ld",
+                g_submitted_frames, produced_frames, copied_frames_total, immersive_frames_total,
+                InterlockedCompareExchange(&scene_hook_calls,0,0), InterlockedCompareExchange(&scene_updates,0,0),
+                InterlockedCompareExchange(&scene_home_updates,0,0), InterlockedCompareExchange(&scene_owner_updates,0,0),
+                InterlockedCompareExchange(&scene_owner_home_updates,0,0));
             write_record("IMMERSIVE-001", "presentation_progress", detail);
         }
     }
 
-    InterlockedExchange(&capture_active, 0);
+    if(!runtime_lost) InterlockedExchange(&capture_active, 0);
     Sleep(100);
+    while(changes){LocalChange* next=changes->next;HeapFree(GetProcessHeap(),0,changes);changes=next;}
+    cadence_report("session_end");cadence=(StereoCadence){0};
     destroy_xr_state(&state);
 
-    snprintf(detail, sizeof(detail),
+    telemetry_snprintf(detail, sizeof(detail),
         "\"status\":\"summary\",\"submitted_frames\":%llu,\"captured_frames\":%llu,"
-        "\"immersive_frames\":%llu,\"final_session_state\":%d",
-        g_submitted_frames, produced_frames, immersive_frames_total, g_session_state);
+        "\"immersive_frames\":%llu,\"stereo_end_accepted\":%llu,\"final_session_state\":%d",
+        g_submitted_frames, produced_frames, immersive_frames_total, stereo_end_accepted_total, g_session_state);
     write_record("IMMERSIVE-001", "session_summary", detail);
-    return 0;
+    return runtime_lost?XR_RUN_LOST:XR_RUN_DONE;
 }
 
 /* ---------------- selftest: two devices + keyed mutex + pixel verify ---------------- */
 
-static void selftest_release_pipeline(void) {
+static void release_probe_pipeline(void);
+static DWORD WINAPI xr_worker_with_callback_stop(LPVOID unused) {
+    BOOL reconnecting=FALSE;
+    DWORD delay=1000,result;
+    for(;;){
+        result=xr_worker(unused);
+        if(result==XR_RUN_LOST) reconnecting=TRUE;
+        release_probe_pipeline();
+        if(probe_context){ID3D11DeviceContext_Release(probe_context);probe_context=NULL;}
+        if(probe_device){ID3D11Device_Release(probe_device);probe_device=NULL;}
+        scale_menu=(struct ScaleMenu){0};
+        panel_short_armed=FALSE;
+        if(!reconnecting || result==XR_RUN_DONE)break;
+        write_record("XR","reconnect_wait","\"status\":\"waiting_for_runtime\"");
+        Sleep(delay);
+        delay=delay<16000?delay*2:16000;
+    }
+    InterlockedExchange(&capture_active,0);
+    /* Covers early startup failure as well as ordinary session exit. This
+       gates callback delivery only; it cannot cancel an in-flight registration. */
+    ef_disarm(&end_frame_bridge);
+    InterlockedOr(&bp_stop_requested,1);
+    return result;
+}
+
+static void release_probe_pipeline(void) {
     if (g_panel_srv) { ID3D11ShaderResourceView_Release(g_panel_srv); g_panel_srv = NULL; }
     if (g_panel_tex) { ID3D11Texture2D_Release(g_panel_tex); g_panel_tex = NULL; }
     InterlockedExchange(&g_panel_frame_ready, 0);
@@ -4299,8 +5479,12 @@ static void selftest_release_pipeline(void) {
     if (g_cb) { ID3D11Buffer_Release(g_cb); g_cb = NULL; }
     if (g_vb) { ID3D11Buffer_Release(g_vb); g_vb = NULL; }
     if (g_il) { ID3D11InputLayout_Release(g_il); g_il = NULL; }
+    if(sphere_vs){ID3D11VertexShader_Release(sphere_vs);sphere_vs=NULL;}
+    if(sphere_ps){ID3D11PixelShader_Release(sphere_ps);sphere_ps=NULL;}
+    if(marker_ps){ID3D11PixelShader_Release(marker_ps);marker_ps=NULL;}
     if (g_ps_solid) { ID3D11PixelShader_Release(g_ps_solid); g_ps_solid = NULL; }
     if (g_eye_copy_vs) { ID3D11VertexShader_Release(g_eye_copy_vs); g_eye_copy_vs = NULL; }
+    if(scale_menu.label){ID3D11ShaderResourceView_Release(scale_menu.label);scale_menu.label=NULL;}
     if (g_panel_ps) { ID3D11PixelShader_Release(g_panel_ps); g_panel_ps = NULL; }
     if (g_ps) { ID3D11PixelShader_Release(g_ps); g_ps = NULL; }
     if (g_vs_dbg) { ID3D11VertexShader_Release(g_vs_dbg); g_vs_dbg = NULL; }
@@ -4317,7 +5501,7 @@ static DWORD WINAPI selftest_worker(LPVOID unused) {
         hr = D3D11CreateDevice(NULL, D3D_DRIVER_TYPE_WARP, NULL, 0,
             levels, 1, D3D11_SDK_VERSION, &probe_device, &selected, &probe_context);
     if (FAILED(hr) || !probe_device || !probe_context) {
-        snprintf(detail, sizeof(detail), "\"selftest\":\"fail\",\"stage\":\"device\",\"hr\":%ld", (long)hr);
+        telemetry_snprintf(detail, sizeof(detail), "\"selftest\":\"fail\",\"stage\":\"device\",\"hr\":%ld", (long)hr);
         write_record(PROBE_ID, "selftest", detail); return 0;
     }
     /* second device simulating the game side, exactly like production */
@@ -4326,12 +5510,13 @@ static DWORD WINAPI selftest_worker(LPVOID unused) {
     hr = D3D11CreateDevice(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, 0,
         levels, 1, D3D11_SDK_VERSION, &dev_a, &selected_b, &ctx_a);
     if (FAILED(hr) || !dev_a || !ctx_a) {
-        snprintf(detail, sizeof(detail), "\"selftest\":\"fail\",\"stage\":\"device_a\",\"hr\":%ld", (long)hr);
+        telemetry_snprintf(detail, sizeof(detail), "\"selftest\":\"fail\",\"stage\":\"device_a\",\"hr\":%ld", (long)hr);
         write_record(PROBE_ID, "selftest", detail); return 0;
     }
     if (!build_draw_pipeline(detail, sizeof(detail))) {
-        snprintf(detail, sizeof(detail), "\"selftest\":\"fail\",\"stage\":\"pipeline\",%s", detail);
-        write_record(PROBE_ID, "selftest", detail); return 0;
+        char pipeline_detail[768];
+        telemetry_snprintf(pipeline_detail, sizeof(pipeline_detail), "\"selftest\":\"fail\",\"stage\":\"pipeline\",%s", detail);
+        write_record(PROBE_ID, "selftest", pipeline_detail); return 0;
     }
 
     /* Display-encoded 0.5 mid-gray exercises the panel-only sRGB EOTF. */
@@ -4535,6 +5720,20 @@ static DWORD WINAPI selftest_worker(LPVOID unused) {
         fabsf(test_yaw) < 0.001f && fabsf(test_pitch) < 0.001f &&
         fabsf(test_roll - 0.52359878f) < 0.001f;
     pose_test.current_center.orientation = (XrQuaternionf){0, sin22_5, 0, cos22_5};
+    EyeOptics returned=pose_test;
+    returned.current_center.orientation=(XrQuaternionf){.2f,.3f,-.1f,.92736185f};
+    returned.return_orientation=returned.current_center.orientation;returned.return_orientation_valid=TRUE;
+    float return_yaw,return_pitch,return_roll;
+    physical_orientation_deltas(&returned,&return_yaw,&return_pitch,&return_roll);
+    pose_environment_origin_ok=pose_environment_origin_ok && fabsf(return_yaw)<.0001f &&
+        fabsf(return_pitch)<.0001f;
+    returned.current_center.orientation=(XrQuaternionf){0,sin22_5,0,cos22_5};
+    physical_orientation_deltas(&returned,&return_yaw,&return_pitch,&return_roll);
+    pose_environment_origin_ok=pose_environment_origin_ok && fabsf(return_roll)<.0001f;
+    returned.return_orientation=(XrQuaternionf){0,0,0,1};
+    returned.artificial_yaw=1.57079633f;
+    Vec3 side_grab=quat_rotate(tracking_to_navigation(&returned),(Vec3){0,0,1});
+    pose_environment_origin_ok=pose_environment_origin_ok && fabsf(side_grab.x-1)<.001f && fabsf(side_grab.z)<.001f;
     BOOL pose_yaw_ok = compose_unity_eye_pose(&pose_base_position, &pose_base_rotation,
         FALSE, &pose_test, 1.0f, 0, &pose_left, &pose_rotation);
     quat_to_yaw_pitch_roll(pose_rotation, &test_yaw, &test_pitch, &test_roll);
@@ -4590,7 +5789,39 @@ static DWORD WINAPI selftest_worker(LPVOID unused) {
         fabsf(effective_navigation_speed_mps(7.5f, 8.0f, FALSE) - 7.5f) < 0.001f &&
         fabsf(effective_navigation_speed_mps(12.5f, 8.0f, TRUE) - 50.0f) < 0.001f &&
         effective_navigation_speed_mps(-1.0f, 2.0f, TRUE) == 0.0f;
-    BOOL navigation_math_ok = artificial_pose_ok && locomotion_scale_compensation_math_ok &&
+    WorldGrab grab_test = {0};
+    XrVector3f hand = {0};
+    (void)world_grab_delta(&grab_test,1,1,TRUE,0,hand);
+    (void)world_grab_delta(&grab_test,1,2,TRUE,1,hand);
+    hand = (XrVector3f){0.25f,-0.5f,1.0f};
+    Vec3 grabbed = world_grab_delta(&grab_test,1,3,TRUE,1,hand);
+    BOOL grab_ok = grabbed.x==-0.25f && grabbed.y==0.5f && grabbed.z==1.0f;
+    (void)world_grab_delta(&grab_test,2,4,TRUE,1,hand);
+    grab_ok = grab_ok && !grab_test.holding && !grab_test.armed;
+    (void)world_grab_delta(&grab_test,2,5,TRUE,0,hand);
+    (void)world_grab_delta(&grab_test,2,6,TRUE,1,hand);
+    (void)world_grab_delta(&grab_test,2,250000007,TRUE,1,hand);
+    grab_ok = grab_ok && !grab_test.holding && !grab_test.armed;
+    ReturnButton button = {0};
+    BOOL gesture_ok = camera_return_gesture(&button,TRUE,TRUE,1)==CAMERA_NONE &&
+        camera_return_gesture(&button,TRUE,FALSE,2)==CAMERA_NONE &&
+        camera_return_gesture(&button,TRUE,TRUE,3)==CAMERA_NONE &&
+        camera_return_gesture(&button,TRUE,FALSE,4)==CAMERA_RETURN &&
+        camera_return_gesture(&button,TRUE,TRUE,5)==CAMERA_NONE &&
+        camera_return_gesture(&button,TRUE,TRUE,800000005)==CAMERA_RECENTER &&
+        camera_return_gesture(&button,TRUE,FALSE,800000006)==CAMERA_NONE &&
+        camera_return_gesture(&button,TRUE,TRUE,800000007)==CAMERA_NONE &&
+        camera_return_gesture(&button,FALSE,TRUE,800000008)==CAMERA_NONE &&
+        camera_return_gesture(&button,TRUE,FALSE,800000009)==CAMERA_NONE;
+    XrPosef shifted={.orientation={0,.70710678f,0,.70710678f},.position={2,3,4}};
+    XrPosef offset={.orientation.w=1}, restored;
+    BOOL reference_ok=offset_after_change(offset,shifted,&offset) &&
+        fabsf(offset.position.x-4)<.001f && fabsf(offset.position.y+3)<.001f &&
+        fabsf(offset.position.z+2)<.001f &&
+        offset_after_change((XrPosef){.orientation.w=1},offset,&restored) &&
+        fabsf(restored.position.x-2)<.001f && fabsf(restored.position.z-4)<.001f &&
+        fabsf(restored.orientation.y-shifted.orientation.y)<.001f;
+    BOOL navigation_math_ok = reference_ok && gesture_ok && grab_ok && artificial_pose_ok && locomotion_scale_compensation_math_ok &&
         (navigation_changed & NAV_STEP_MOVED) != 0 &&
         (navigation_changed & NAV_STEP_SNAPPED) != 0 &&
         held_changed == 0 && navigation_x_latched && !navigation_y_latched &&
@@ -4711,14 +5942,14 @@ static DWORD WINAPI selftest_worker(LPVOID unused) {
                     asymmetric_fov_ok && unity_projection_ok && pose_composition_ok &&
                     pose_config_parse_ok && render_scale_config_parse_ok &&
                     render_scale_policy_ok && world_scale_config_parse_ok &&
-                    navigation_math_ok &&
+                    marker_ps && sphere_ps && sphere_vs && navigation_math_ok &&
                     color_eotf_ok && k[2] > 200 && k[0] < 80;
                 ID3D11DeviceContext_Unmap(probe_context, (ID3D11Resource*)staging, 0);
             }
             staging->lpVtbl->Release(staging);
         }
     }
-    snprintf(detail, sizeof(detail),
+    telemetry_snprintf(detail, sizeof(detail),
         "\"selftest\":\"%s\",\"center_rgb\":[%.2f,%.2f,0.00],\"corner_blue\":%.2f,"
         "\"drawn\":%d,\"km_held\":%d,\"geometry_ok\":%d,\"aspect_ok\":%d,"
         "\"geometry_scale_ok\":%d,\"controller_pointer_math_ok\":%d,"
@@ -4745,7 +5976,7 @@ static DWORD WINAPI selftest_worker(LPVOID unused) {
     if (rt_tex) ID3D11Texture2D_Release(rt_tex);
     ID3D11Texture2D_Release(src_tex_a);
     km->lpVtbl->Release(km);
-    selftest_release_pipeline();
+    release_probe_pipeline();
     if (g_shared_km_probe) { IDXGIKeyedMutex_Release(g_shared_km_probe); g_shared_km_probe = NULL; }
     if (g_local_shared_tex) { ID3D11Texture2D_Release(g_local_shared_tex); g_local_shared_tex = NULL; }
     ctx_a->lpVtbl->Release(ctx_a);
@@ -4867,10 +6098,31 @@ static BOOL apply_runtime_settings_text(const char* text, BOOL versioned_setting
             nav_snap_angle_rad = degrees * 0.01745329252f;
             loaded = TRUE;
         }
+        float zone;
+        if(parse_json_float_setting(text,"movementDeadzone",&zone) && zone>=0 && zone<=.9f)move_deadzone=zone;
+        if(parse_json_bool_setting(text,"contactEnabled",&value))contact_enabled=value;
+        if(parse_json_bool_setting(text,"contactMotion",&value))contact_motion=value;
+        if(parse_json_float_setting(text,"contactStrength",&zone) && zone>=0 && zone<=100)contact_strength=zone;
+        if(parse_json_float_setting(text,"contactTilt",&zone) && zone>=0 && zone<=100)contact_tilt=zone;
+        if(parse_json_float_setting(text,"contactDuration",&zone) && zone>=0.5 && zone<=2)contact_duration=zone;
+        if(parse_json_float_setting(text,"contactReach",&zone) && zone>=50 && zone<=200)contact_reach=zone;
+        if(parse_json_float_setting(text,"contactHandRadiusMm",&zone) && zone>=10 && zone<=50)hand_radius_mm=zone;
+        if(parse_json_float_setting(text,"contactHoldMs",&zone) && zone>=0 && zone<=250)contact_hold_ms=zone;
+        if(parse_json_bool_setting(text,"contactHaptics",&value))contact_haptics=value;
+        if(parse_json_float_setting(text,"hapticStrength",&zone) && zone>=0 && zone<=100)haptic_strength=zone;
+        if(parse_json_float_setting(text,"hapticDuration",&zone) && zone>=0 && zone<=250)haptic_duration=zone;
+        if(parse_json_bool_setting(text,"swapMovementSticks",&value))swap_move_sticks=value;
+        if(parse_json_bool_setting(text,"grabTracksPanelHand",&value))grab_panel_hand=value;
+        if(parse_json_bool_setting(text,"grabUsesTrigger",&value))grab_with_trigger=value;
+        if (parse_json_bool_setting(text, "showControllerHands", &value)) show_hands=value;
+        if (parse_json_bool_setting(text, "showContactLocations", &value)) show_contact=value;
         if (parse_json_bool_setting(text, "navigationHandsSwapped", &value)) {
             controller_hands_swapped = value;
             loaded = TRUE;
         }
+        LONG disabled_mask;
+        if(read_home_vfx_mask(text,&disabled_mask))InterlockedExchange(&home_vfx_disabled,disabled_mask);
+        if(parse_json_bool_setting(text,"homePostProcessingEnabled",&value))InterlockedExchange(&home_vfx_allowed,value);
         if (parse_json_bool_setting(text, "postProcessingEnabled", &value)) {
             post_processing_enabled = value;
             loaded = TRUE;
@@ -4967,14 +6219,39 @@ static BOOL load_runtime_settings(void) {
     return load_runtime_settings_file(path, FALSE);
 }
 
+static BOOL read_contact_consent(void) {
+    WCHAR path[MAX_PATH];
+    const WCHAR suffix[]=L"\\UmaVR\\contact-consent.txt";
+    DWORD len=GetEnvironmentVariableW(L"LOCALAPPDATA",path,MAX_PATH);
+    if(!len || len>MAX_PATH-(sizeof suffix/sizeof *suffix))return FALSE;
+    memcpy(path+len,suffix,sizeof suffix);
+    HANDLE file=CreateFileW(path,GENERIC_READ,FILE_SHARE_READ,NULL,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,NULL);
+    if(file==INVALID_HANDLE_VALUE)return FALSE;
+    const char token[]="uma-contact-v1";
+    char data[sizeof token]; DWORD count=0;
+    BOOL ok=ReadFile(file,data,sizeof data,&count,NULL) && count==sizeof token-1 &&
+        !memcmp(data,token,sizeof token-1);
+    CloseHandle(file);
+    return ok;
+}
+
 static DWORD WINAPI shader_init_worker(LPVOID unused) {
     (void)unused;
+    telemetry_init();
+    write_record(PROBE_ID, "startup", "\"status\":\"loaded\",\"mode\":\"panel_fail_open_plus_live_stereo\"");
+    AddVectoredExceptionHandler(1, panel_veh);
     if (!compile_all_shaders()) {
         write_record(PROBE_ID, "disabled", "\"status\":\"failed\",\"stage\":\"shader_precompile\"");
         return 0;
     }
     write_record("CAP-009", "pipe_stage", "\"stage\":\"shaders_precompiled\"");
+    contact_consent=read_contact_consent();
     (void)load_runtime_settings();
+    saved_world_scale=world_scale;saved_snap_degrees=nav_snap_angle_rad*57.2957795f;
+    saved_hand_swap=controller_hands_swapped;saved_start_follow=live_camera_follow;
+    LONG mask=0;
+    for(unsigned i=0;i<VFX_COUNT;i++)if(live_vfx_options[i].game_value && *live_vfx_options[i].game_value) mask|=1L<<i;
+    InterlockedExchange(&live_vfx_mask,mask);
     write_record("POSE-002", "camera_follow_config",
         live_camera_follow ?
             "\"status\":\"observed\",\"context\":\"Live\",\"position_follow\":true,\"rotation_follow\":true,\"authored_roll\":true" :
@@ -4983,7 +6260,7 @@ static DWORD WINAPI shader_init_worker(LPVOID unused) {
                 "\"status\":\"defaulted\",\"context\":\"Live\",\"position_follow\":false,\"rotation_follow\":false"));
     {
         char detail[192];
-        snprintf(detail, sizeof(detail),
+        telemetry_snprintf(detail, sizeof(detail),
             "\"status\":\"%s\",\"world_scale\":%.3f,\"translation_multiplier\":%.3f,"
             "\"coupling\":\"head_translation+locomotion+eye_offset\","
             "\"authored_pose_scaled\":false,\"rotation_scaled\":false",
@@ -4995,7 +6272,7 @@ static DWORD WINAPI shader_init_worker(LPVOID unused) {
         char detail[640];
         float effective_speed = effective_navigation_speed_mps(nav_locomotion_speed_mps,
             world_scale, nav_locomotion_scale_compensation_enabled);
-        snprintf(detail, sizeof(detail),
+        telemetry_snprintf(detail, sizeof(detail),
             "\"status\":\"observed\",\"locomotion_enabled\":%s," 
             "\"locomotion_speed_mps\":%.3f,\"effective_speed_mps\":%.3f,"
             "\"world_scale_compensation\":%s,\"speed_reference_world_scale\":%.2f,"
@@ -5026,7 +6303,7 @@ static DWORD WINAPI shader_init_worker(LPVOID unused) {
             (unsigned)film_roll_effect_enabled + (unsigned)hatching_effect_enabled +
             (unsigned)letter_box_effect_enabled + (unsigned)rain_splash_effect_enabled;
         char detail[384];
-        snprintf(detail, sizeof(detail),
+        telemetry_snprintf(detail, sizeof(detail),
             "\"status\":\"observed\",\"post_processing_enabled\":%s,"
             "\"effect_slot_count\":22,\"enabled_slot_count\":%u,"
             "\"dof_enabled\":%s,\"diffusion_enabled\":%s,\"bloom_enabled\":%s,"
@@ -5048,7 +6325,7 @@ static DWORD WINAPI shader_init_worker(LPVOID unused) {
     }
     HANDLE t1 = CreateThread(NULL, 0, capture_worker, NULL, 0, NULL);
     if (t1) CloseHandle(t1);
-    HANDLE t2 = CreateThread(NULL, 0, xr_worker, NULL, 0, NULL);
+    HANDLE t2 = CreateThread(NULL, 0, xr_worker_with_callback_stop, NULL, 0, NULL);
     if (t2) CloseHandle(t2);
     HANDLE t3 = CreateThread(NULL, 0, unity_adapter_worker, NULL, 0, NULL);
     if (t3) CloseHandle(t3);
@@ -5066,17 +6343,10 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved) {
             DWORD got = GetEnvironmentVariableA("UMAVR_PROBE_FAST", flag, sizeof(flag));
             fast_mode = got > 0 && flag[0] == '1';
         }
-        WCHAR base[MAX_PATH]; DWORD length = GetEnvironmentVariableW(L"LOCALAPPDATA", base, MAX_PATH);
-        if (length && length < MAX_PATH - 64) {
-            WCHAR directory[MAX_PATH];
-            swprintf(directory, MAX_PATH, L"%ls\\UmaVR", base); CreateDirectoryW(directory, NULL);
-            swprintf(log_path, MAX_PATH, L"%ls\\immersive-001.log", directory);
-        }
-        write_record(PROBE_ID, "startup", "\"status\":\"loaded\",\"mode\":\"panel_fail_open_plus_live_stereo\"");
-        AddVectoredExceptionHandler(1, panel_veh);
         HANDLE init_t = CreateThread(NULL, 0, shader_init_worker, NULL, 0, NULL);
         if (init_t) CloseHandle(init_t);
         (void)instance;
     }
     return TRUE;
 }
+

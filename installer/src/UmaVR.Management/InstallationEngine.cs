@@ -5,7 +5,7 @@ using System.Text.Json.Nodes;
 
 namespace UmaVR.Management;
 
-public sealed class InstallationEngine
+public sealed partial class InstallationEngine
 {
     private const int SupportedSchemaVersion = 1;
     private const string StateRelativePath = "vrmod/install-state.json";
@@ -31,15 +31,46 @@ public sealed class InstallationEngine
 
     public static string FindInitialGameRoot()
     {
-        DirectoryInfo? current = new(AppContext.BaseDirectory);
-        for (int depth = 0; depth < 7 && current is not null; depth++, current = current.Parent)
+        string roaming = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+        return FindDmmGameRoot(Path.Combine(roaming, "dmmgameplayer5", "dmmgame.cnf"));
+    }
+
+    public static string FindDmmGameRoot(string configPath)
+    {
+        try
         {
-            if (IsGameRoot(current.FullName))
+            using var stream = File.OpenRead(configPath);
+            using var config = JsonDocument.Parse(stream);
+            if (config.RootElement.ValueKind != JsonValueKind.Object ||
+                !config.RootElement.TryGetProperty("contents", out var contents) ||
+                contents.ValueKind != JsonValueKind.Array)
+                return string.Empty;
+
+            string? found = null;
+            foreach (var entry in contents.EnumerateArray())
             {
-                return current.FullName;
+                if (entry.ValueKind != JsonValueKind.Object ||
+                    !entry.TryGetProperty("productId", out var id) || id.ValueKind != JsonValueKind.String || !id.ValueEquals("umamusume") ||
+                    !entry.TryGetProperty("detail", out var detail) || detail.ValueKind != JsonValueKind.Object ||
+                    !detail.TryGetProperty("installed", out var installed) || installed.ValueKind != JsonValueKind.True ||
+                    !detail.TryGetProperty("path", out var path) || path.ValueKind != JsonValueKind.String)
+                    continue;
+
+                string location = path.GetString()!;
+                if (!Path.IsPathFullyQualified(location) || !IsGameRoot(location))
+                    continue;
+
+                location = Path.TrimEndingDirectorySeparator(Path.GetFullPath(location));
+                if (found != null && !string.Equals(found, location, StringComparison.OrdinalIgnoreCase))
+                    return string.Empty;
+                found = location;
             }
+            return found ?? string.Empty;
         }
-        return Environment.CurrentDirectory;
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return string.Empty;
+        }
     }
 
     public static string? FindPackageRoot()
@@ -101,7 +132,8 @@ public sealed class InstallationEngine
     public InstallationResult Install(
         string gameRoot,
         string packageRoot,
-        IProgress<InstallationProgress>? progress = null)
+        IProgress<InstallationProgress>? progress = null,
+        bool automaticUpdate = false)
     {
         string game = RequireGameRoot(gameRoot);
         EnsureGameStopped();
@@ -113,11 +145,14 @@ public sealed class InstallationEngine
         {
             throw new InstallationException("PackagePayloadMissing", payload);
         }
+        using var ownership = LockInstallation(game);
         ValidatePackagePayload(manifest, payload);
+        var retired = InspectUpdateLayout(game, manifest, automaticUpdate);
 
         LocalifyStatus localify = DetectLocalify(game);
         string timestamp = DateTime.Now.ToString("yyyyMMdd-HHmmss-fff");
         string backupRelative = $"vrmod/rollback/product-install-{manifest.Version}-{timestamp}";
+        RequireOrdinaryPath(game, backupRelative);
         string backupRoot = ResolveContainedPath(game, backupRelative);
         string statePath = ResolveContainedPath(game, StateRelativePath);
         string? previousStateBackup = null;
@@ -135,6 +170,16 @@ public sealed class InstallationEngine
         List<InstallStateFile> stateFiles = new();
         try
         {
+            foreach (var entry in retired)
+            {
+                string destination = ResolveContainedPath(game, entry.Path);
+                string backup = ResolveContainedPath(backupRoot, entry.Path);
+                Directory.CreateDirectory(Path.GetDirectoryName(backup)!);
+                File.Move(destination, backup);
+                completed.Add(entry);
+                stateFiles.Add(entry);
+            }
+
             for (int index = 0; index < manifest.Files.Count; index++)
             {
                 PackageFile file = manifest.Files[index];
@@ -173,6 +218,8 @@ public sealed class InstallationEngine
                     fileBackupRelative = file.Path;
                 }
                 Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                // Register the undo operation before a copy can partially replace the file.
+                completed.Add(new InstallStateFile { Path = file.Path, PriorFile = priorFile, BackupRelative = fileBackupRelative });
                 File.Copy(source, destination, overwrite: true);
                 string installedHash = FileSha256(destination);
                 if (!string.Equals(installedHash, sourceHash, StringComparison.Ordinal))
@@ -188,7 +235,6 @@ public sealed class InstallationEngine
                     BackupRelative = fileBackupRelative,
                     PreserveOnUninstall = file.PreserveOnUninstall
                 };
-                completed.Add(entry);
                 stateFiles.Add(entry);
             }
 
@@ -246,14 +292,28 @@ public sealed class InstallationEngine
     {
         string game = RequireGameRoot(gameRoot);
         EnsureGameStopped();
+        using var ownership = LockInstallation(game);
         string statePath = ResolveContainedPath(game, StateRelativePath);
         if (!File.Exists(statePath))
         {
             throw new InstallationException("InstallStateMissing");
         }
         InstallState state = ReadState(statePath);
+        RequireOrdinaryPath(game, state.BackupRoot);
         string backupRoot = ResolveContainedPath(game, state.BackupRoot);
         List<string> warnings = new();
+
+        // Validate all retired-file restores before undoing any part of this update.
+        foreach (var entry in state.Files.Where(file => file.Action == "retired"))
+        {
+            RequireOrdinaryPath(game, entry.Path);
+            RequireOrdinaryPath(backupRoot, entry.Path);
+            string backup = ResolveContainedPath(backupRoot, entry.Path);
+            string destination = ResolveContainedPath(game, entry.Path);
+            if (!IsRetirableTool(entry.Path) || File.Exists(destination) || Directory.Exists(destination) ||
+                !File.Exists(backup) || !string.Equals(FileSha256(backup), entry.InstalledHash, StringComparison.OrdinalIgnoreCase))
+                throw new InstallationException("UpdateLayoutManual", entry.Path);
+        }
 
         for (int index = 0; index < state.Files.Count; index++)
         {
@@ -305,6 +365,12 @@ public sealed class InstallationEngine
                     throw new InstallationException("PreviousStateMissing");
                 }
                 InstallState previousState = ReadState(previousStatePath);
+                foreach (var entry in state.Files.Where(file => file.Action == "retired"))
+                {
+                    string restoredPath = ResolveContainedPath(game, entry.Path);
+                    Directory.CreateDirectory(Path.GetDirectoryName(restoredPath)!);
+                    File.Copy(ResolveContainedPath(backupRoot, entry.Path), restoredPath, overwrite: false);
+                }
                 File.Copy(previousStatePath, statePath, overwrite: true);
                 restoredPrevious = true;
                 restoredVersion = previousState.Version;

@@ -7,11 +7,11 @@ $project = Join-Path $settingsRoot "src\UmaVR.Configurator\UmaVR.Configurator.cs
 dotnet build $project -c Release
 if ($LASTEXITCODE) { throw "configurator build failed: $LASTEXITCODE" }
 $exe = Join-Path $settingsRoot "src\UmaVR.Configurator\bin\Release\net10.0-windows\UmaVR.Configurator.exe"
-& $exe --self-test
+& $exe --self-test | Out-Null
 if ($LASTEXITCODE) { throw "configurator self-test failed: $LASTEXITCODE" }
-& $exe --verify-localization
+& $exe --verify-localization | Out-Null
 if ($LASTEXITCODE) { throw "configurator localization verification failed: $LASTEXITCODE" }
-& $exe --verify-layout
+& $exe --verify-layout | Out-Null
 if ($LASTEXITCODE) { throw "configurator localized layout verification failed: $LASTEXITCODE" }
 $source = Get-Content -LiteralPath (Join-Path $settingsRoot "src\UmaVR.Configurator\MainForm.cs") -Raw
 $uiText = Get-Content -LiteralPath (Join-Path $settingsRoot "src\UmaVR.Configurator\UiText.cs") -Raw

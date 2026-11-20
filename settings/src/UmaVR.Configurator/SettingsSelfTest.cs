@@ -14,6 +14,9 @@ internal static class SettingsSelfTest
             VrSettings requested = new()
             {
                 LiveCameraFollow = true,
+                ContactEnabled = false, ContactMotion = false, ContactHaptics = false,
+                ContactReach = 145, ContactStrength = 60, ContactTilt = 25, ContactDuration = 1.5f,
+                HapticStrength = 70, HapticDuration = 60, SwapMovementSticks = false,
                 WorldScale = 8.0f,
                 EyeRenderScale = 0.75f,
                 LocomotionEnabled = false,
@@ -81,6 +84,12 @@ internal static class SettingsSelfTest
             }
 
             VrSettingsValidation roundTrip = SettingsStore.LoadFromGameRoot(root);
+            var contact = roundTrip.Settings;
+            if (contact.ContactEnabled || contact.ContactMotion || contact.ContactHaptics ||
+                contact.ContactReach != 145 || contact.ContactStrength != 60 || contact.ContactTilt != 25 ||
+                contact.ContactDuration != 1.5f || contact.HapticStrength != 70 || contact.HapticDuration != 60 ||
+                contact.SwapMovementSticks || !VrSettings.CreateDefaults().SwapMovementSticks)
+                throw new InvalidOperationException("Contact settings or movement stick mapping changed during save/load");
             if (roundTrip.UsedFallback || !roundTrip.Settings.LiveCameraFollow ||
                 Math.Abs(roundTrip.Settings.WorldScale - 8.0f) > 0.0001f ||
                 Math.Abs(roundTrip.Settings.EyeRenderScale - 0.75f) > 0.0001f ||

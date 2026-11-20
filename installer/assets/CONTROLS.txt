@@ -1,0 +1,27 @@
+UmaVR 0.1.10
+
+한국어
+패널 손 그립을 0.75초 누르면 그 손 앞에 VR 설정이 열립니다. 반대 손 레이로 행이나 버튼을 가리키고 트리거 또는 A/X로 선택합니다. 이전·다음은 페이지 이동, 설정 목록은 VFX에서 돌아가기, 닫기 또는 B/Y는 뒤로입니다.
+Home에서는 두 손의 접촉점을 각각 표시합니다. 월드 잡기의 버튼(포인터 그립/트리거)과 추적 손을 따로 설정할 수 있습니다. 패널이 열려 있으면 UI 입력이 우선합니다.
+Home·Live에서 패널 손 그립을 짧게 눌렀다 놓으면 보조 패널, 0.75초 누르면 VR 설정이 열립니다.
+시각 효과에서 Home·Live별 항목을 원본 또는 OFF로 전환합니다. 원본은 장면 값을 사용합니다. Live 전체 후처리와 효과 묶음 상태도 확인하세요.
+Live의 눈 렌더 배율은 −/+로 5%씩 바꾼 뒤 적용을 선택합니다. 다른 스위치는 선택 즉시 반영됩니다.
+월드 이동은 포인터 손 그립을 누르고 손을 움직입니다. 손 역할을 바꾸면 그립 역할도 바뀝니다.
+물리 왼쪽 스틱을 짧게 눌렀다 놓으면 원본 카메라로 복귀합니다. 0.8초 누르면 현재 머리 위치를 새 이동 원점으로 잡습니다. 물리 오른쪽 스틱 클릭은 Live 원본 카메라의 위치·회전 추종을 전환합니다.
+보조 패널과 설정 패널은 손 위치를 따라가며 읽는 면의 각도를 유지합니다. 입체 구는 컨트롤러입니다. Home에서는 얼굴·몸통의 흰 표식을 손으로 가볍게 건드리면 초록 고리와 진동이 나타납니다. 왼 스틱 짧은 클릭은 위치와 각도를 함께 복귀시킵니다. ‘게임 원본(참고)’은 원본 카메라를 읽은 값입니다. VR은 ‘양안 후처리’를 눌러 전환하고 ‘VR 카메라’에서 실제 플래그를 확인합니다. 별도 적용 버튼은 없습니다. Home 양안 후처리는 ON/OFF로 전환하며 대기 항목은 장면에서 활성화될 때 적용됩니다.
+
+English
+Hold the panel-hand grip for 0.75 s to open VR settings at that hand. Aim with the opposite hand and select a row or button with the trigger or A/X. Previous and Next change pages. Settings returns from VFX. Close exits and B/Y goes back.
+Home tracks both hands for contact. Choose the pointer grip or trigger to activate world grab, and choose which hand to track independently. An open panel takes input priority.
+Tap the panel grip for the auxiliary screen. Visual effects switches between scene defaults and OFF for Home or Live. Check the Live master and composite group when comparing effects.
+In Live, select −/+ for eye render scale in 5% steps, then Apply. Switches take effect immediately.
+Hold the pointer-hand grip and move that hand to move the world. Swapping hands swaps grip roles.
+Tap and release the physical left stick to return to the game camera. Hold it for 0.8 s to set your current head position as the movement origin. Click the physical right stick to toggle Live camera position and rotation follow. Both panels follow the grip position and keep a readable orientation. Shaded spheres show tracked hands. Touch a white face or body target for a green ring and haptic pulse. A short left-stick click resets position and orientation. Toggle stereo post-processing to control Home. VR cameras shows the observed eye flags. Original game is read-only. Idle effects follow scene activation.
+
+日本語
+パネル側グリップを0.75秒長押しすると、その手の前にVR設定が開きます。反対の手のレイで行やボタンを指し、トリガーまたはA/Xで選択します。前へ・次へでページを移動し、設定一覧でVFXから戻ります。閉じるで終了、B/Yで戻ります。
+ホームでは両手の接触点を表示します。ワールド移動の開始ボタン（ポインター側グリップまたはトリガー）と追跡する手を個別に設定できます。パネル表示中はUI操作が優先されます。
+グリップを短く押すと補助画面を表示します。視覚効果ではホーム・ライブの効果を標準・OFFに切り替えます。ライブの全体設定と複合効果の状態も確認してください。
+ライブの描画倍率は−/+で5%ずつ変更し、適用を選びます。スイッチは即時反映されます。
+ポインター側のグリップを押したまま手を動かすとワールドを移動できます。左右交換でグリップの役割も入れ替わります。
+左スティックを短く押して離すと原作カメラに戻り、0.8秒長押しで現在の頭の位置を移動原点にします。右スティック押し込みでライブカメラの位置・回転追従を切り替えます。両パネルは手の位置に追従し、読みやすい向きを維持します。球は両手、白い目印は顔・胴の接触位置です。触れると緑のリングと振動で知らせます。左スティックの短押しで位置と角度を戻します。ホームの両眼後処理を切り替え、VRカメラの実測状態を確認できます。ゲーム側は参考表示です。待機中の効果はシーンで有効になった時に反映されます。

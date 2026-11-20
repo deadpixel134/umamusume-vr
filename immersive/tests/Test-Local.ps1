@@ -1,4 +1,4 @@
-param([string]$ProbeDll = "", [string]$ZigPath = "")
+param([string]$ProbeDll = "", [string]$ZigPath = "", [switch]$StaticOnly)
 $ErrorActionPreference = "Stop"
 $root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $workspace = (Resolve-Path (Join-Path $root "..\..")).Path
@@ -19,10 +19,12 @@ if ($snapshotIndex -lt 0 -or $renderIndex -le $snapshotIndex -or $restoreIndex -
     $generationRenderIndex -lt 0 -or $generationIndex -le $generationRenderIndex -or
     -not $sourceText.Contains("camera_get_near_clip(owner)") -or
     -not $sourceText.Contains("camera_get_far_clip(owner)") -or
-    -not $sourceText.Contains("build_unity_eye_projection(&optics.fov[eye], saved_near_clip,") -or
-    -not $sourceText.Contains("const Vec3* base_position = live_camera_follow ? &saved_position : &authored_pose_anchor_position") -or
-    -not $sourceText.Contains("const Quat* base_rotation = live_camera_follow ? &saved_rotation : &authored_pose_anchor_rotation") -or
-    -not $sourceText.Contains("compose_unity_eye_pose(base_position, base_rotation, live_camera_follow,") -or
+    -not $sourceText.Contains("eye_near_clip = camera_get_near_clip(owner)") -or
+    -not $sourceText.Contains("build_unity_eye_projection(&optics.fov[eye], eye_near_clip,") -or
+    -not $sourceText.Contains("(owner, saved_near_clip, mi_camera_set_near_clip)") -or
+    -not $sourceText.Contains("const Vec3* base_position=&effective_position") -or
+    -not $sourceText.Contains("const Quat* base_rotation=&effective_rotation") -or
+    -not $sourceText.Contains("compose_unity_eye_pose(base_position, base_rotation, follow_current,") -or
     -not $sourceText.Contains("&optics, world_scale, eye") -or
     -not $sourceText.Contains("float inverse_world_scale = 1.0f / perceived_world_scale") -or
     -not $sourceText.Contains("unity_delta.x *= inverse_world_scale") -or
@@ -53,7 +55,7 @@ if ($snapshotIndex -lt 0 -or $renderIndex -le $snapshotIndex -or $restoreIndex -
     -not $sourceText.Contains("transform_set_rotation(transform, &saved_rotation)") -or
     -not $sourceText.Contains("transform_get_position(owner_transform, &authored_pose_anchor_position)") -or
     -not $sourceText.Contains("transform_get_rotation(owner_transform, &authored_pose_anchor_rotation)") -or
-    -not $sourceText.Contains("InterlockedCompareExchange(&eye_render_in_progress, 0, 0) == 0")) {
+    -not $sourceText.Contains("InterlockedCompareExchange(&eye_render_in_progress,0,0))return;")) {
     throw "authored render/pose-space ordering and restoration regression"
 }
 $eyeShareStart = $sourceText.IndexOf("static BOOL ensure_shared_eye_pair")
@@ -70,9 +72,8 @@ if (-not $sourceText.Contains('il2cpp_string_equals_ascii(scene_name, "Live")') 
     -not $sourceText.Contains('write_disabled("shared_eye_pair_reuse_contract"') -or
     [string]::IsNullOrWhiteSpace($eyeShareText) -or
     $eyeShareText.Contains("get_native_texture") -or
-    $sourceText.Contains('il2cpp_string_equals_ascii(scene_name, "Race")') -or
+    (-not $sourceText.Contains('BOOL race_scene = il2cpp_string_equals_ascii(scene_name, "Race");')) -or
     $sourceText.Contains('component_is(components->vector[i], "Gallop", "RaceImageEffect")') -or
-    $sourceText.Contains('il2cpp_string_equals_ascii(scene_name, "Story")') -or
     $sourceText.Contains('component_is(components->vector[i], "Gallop", "StoryImageEffect")') -or
     $sourceText.Contains('il2cpp_string_equals_ascii(scene_name, "LiveTheater")')) {
     throw "accepted Live owner/fail-open regression"
@@ -83,7 +84,13 @@ $homeSceneText = if ($homeSceneStart -ge 0 -and $homeSceneEnd -gt $homeSceneStar
     $sourceText.Substring($homeSceneStart, $homeSceneEnd - $homeSceneStart)
 } else { "" }
 if ([string]::IsNullOrWhiteSpace($homeSceneText) -or
-    -not $homeSceneText.Contains('if (home_scene)') -or
+    -not $homeSceneText.Contains('if (home_scene || story_scene)') -or
+    -not $homeSceneText.Contains('BpSourceKind route=BP_SOURCE_NONE;') -or
+    -not $homeSceneText.Contains('if (race_scene) route=BP_SOURCE_RACE;') -or
+    -not $homeSceneText.Contains('else if (home_scene) route=BP_SOURCE_HOME;') -or
+    -not $homeSceneText.Contains('else if (il2cpp_string_equals_ascii(scene_name,"OutGame")) route=BP_SOURCE_DRESS;') -or
+    -not $homeSceneText.Contains('else if (story_scene && story_layer_trial(scene)) route=BP_SOURCE_STORY;') -or
+    -not $homeSceneText.Contains('bp_main_step(scene,route);') -or
     -not $homeSceneText.Contains('if (current_authored_owner) destroy_eye_unity_objects();') -or
     -not $sourceText.Contains('BOOL home_contract = FALSE;') -or
     -not $sourceText.Contains('FAIL-036: the metadata-selected OnRender native pointer is shared') -or
@@ -96,10 +103,27 @@ if ([string]::IsNullOrWhiteSpace($homeSceneText) -or
     -not $sourceText.Contains('InterlockedCompareExchange(&eye_pair_capture_ready, 0, 0)')) {
     throw "Home PANEL fallback / rejected shared-hook isolation regression"
 }
+$storySelector = Get-Content -LiteralPath (Join-Path $root 'src/base_story_source.h') -Raw
+$storyCapability = Get-Content -LiteralPath (Join-Path $root 'src/base_source_capability.h') -Raw
+if (-not $storySelector.Contains('kind==BP_SOURCE_HOME?1:0') -or
+    -not $storySelector.Contains('component_is(c,"Gallop",kind==BP_SOURCE_RACE?"RaceImageEffect":"StoryImageEffect")') -or
+    -not $storySelector.Contains('component_get_game_object(c)==go') -or
+    -not $storySelector.Contains('related!=camera') -or
+    -not $storySelector.Contains('related!=additional') -or
+    -not $storyCapability.Contains('mask==BP_STORY_REQUIRED && !duplicate && same_go && camera_same && complete && relationships')) {
+    throw 'Story strict active-owner/relationship fail-open guard regression'
+}
 if ($sourceText.Contains("eye_generation_gpu_ready") -or
     $sourceText.Contains("eye_copy_ready_query") -or
     $sourceText.Contains("D3D11_ASYNC_GETDATA_DONOTFLUSH")) {
     throw "rejected Race GPU-fence route must remain absent"
+}
+# Master storage is one byte. Reject missing or non-Boolean metadata before either access.
+$masterStart = $sourceText.IndexOf('if (!post_processing_enabled) {')
+$masterEnd = $sourceText.IndexOf('#define APPLY_ZERO', $masterStart)
+$masterCode = $sourceText.Substring($masterStart, $masterEnd - $masterStart)
+if ($masterCode -notmatch '(?s)enabled_field\s*\?\s*il2cpp_field_get_type\(enabled_field\)\s*:\s*NULL;\s*if\s*\(!master_type\s*\|\|\s*il2cpp_type_get_type\(master_type\)\s*!=\s*0x02[^)]*\)\s*\{\s*master_contract = FALSE;\s*\}\s*else\s*\{[^}]*il2cpp_field_get_value\(current, enabled_field, &saved\);[^}]*il2cpp_field_set_value\(current, enabled_field, &disabled\);[^}]*vfx_master_override.applied = TRUE;') {
+    throw 'Live master VFX access must be guarded by its Boolean metadata contract'
 }
 if (-not $sourceText.Contains('APPLY_ZERO(blur_effect_enabled, "BlurOptimized", "IsEnable", 1, 2)') -or
     -not $sourceText.Contains('APPLY_ZERO(FALSE, "GlobalFog", "IsDistanceFog", 1, 2)') -or
@@ -189,9 +213,13 @@ if ([string]::IsNullOrWhiteSpace($requiredExports) -or
     $requiredExports.Contains("il2cpp_method_get_name")) {
     throw "SETTINGS-005 optional metadata exports must not disable the accepted Unity adapter"
 }
+$eyeOutput = Get-Content -LiteralPath (Join-Path $root 'src/base_eye_output.h') -Raw
 if (-not $sourceText.Contains("g_panel_ps_src") -or
     -not $sourceText.Contains("PSSetShader(probe_context, g_panel_ps, NULL, 0)") -or
-    -not $sourceText.Contains("PSSetShader(probe_context, g_ps, NULL, 0)")) {
+    -not $sourceText.Contains('BOOL owned=xr_cache_telemetry.owned;') -or
+    -not $sourceText.Contains('bp_eye_output_shader(owned!=FALSE,g_ps,g_panel_ps)') -or
+    -not $sourceText.Contains('PSSetShader(probe_context, eye_ps, NULL, 0)') -or
+    -not $eyeOutput.Contains('return owned?display:authored;')) {
     throw "panel color shader / accepted immersive eye-copy separation regression"
 }
 if (-not $sourceText.Contains("xrCreateActionSet") -or
@@ -205,7 +233,7 @@ if (-not $sourceText.Contains("xrCreateActionSet") -or
     -not $sourceText.Contains("GetForegroundWindow() == g_game_window") -or
     -not $sourceText.Contains("(trigger_active && trigger_value >= 0.55f) || (primary_active && primary_face_down)") -or
     -not $sourceText.Contains("release_synthetic_input();") -or
-    -not $sourceText.Contains("controller_panel_active = TRUE")) {
+    -not $sourceText.Contains("controller_panel_active = !settings_panel")) {
     throw "CTRL-001 action/pointer/dedup/foreground/release ownership regression"
 }
 if (-not $sourceText.Contains("g_last_pointer_valid") -or
@@ -243,9 +271,9 @@ if (-not $sourceText.Contains("build_cursor_vertices") -or
     -not $sourceText.Contains("g_ps_solid, NULL, 0")) {
     throw "CTRL-003/CTRL-004 authoritative mapped-coordinate circular HMD cursor composition regression"
 }
-if (-not $sourceText.Contains('live_camera_follow ? &saved_position : &authored_pose_anchor_position') -or
-    -not $sourceText.Contains('live_camera_follow ? &saved_rotation : &authored_pose_anchor_rotation') -or
-    -not $sourceText.Contains('base_rotation, live_camera_follow,') -or
+if (-not $sourceText.Contains('(token || follow_current)?saved_position:authored_pose_anchor_position') -or
+    -not $sourceText.Contains('(token || follow_current)?saved_rotation:authored_pose_anchor_rotation') -or
+    -not $sourceText.Contains('base_rotation, follow_current,') -or
     -not $sourceText.Contains('(authored_rotation_follow ? base_roll : 0.0f) + physical_roll') -or
     $sourceText.Contains('live_entry_roll_bias') -or
     -not $sourceText.Contains('pose_environment_origin_ok') -or
@@ -333,9 +361,9 @@ if (-not $sourceText.Contains("quick.OutputWindow != g_game_window") -or
     -not $sourceText.Contains("InterlockedIncrement(&desktop_mirror_generation)") -or
     -not $sourceText.Contains("xr_desktop_mirror_generation == generation") -or
     -not $sourceText.Contains("xr_desktop_mirror_handle == handle") -or
-    -not $sourceText.Contains("desktop_mirror_ready && (!immersive_drawn || auxiliary_panel_presented)") -or
-    -not $sourceText.Contains("presented_panel_width = g_panel_width") -or
-    -not $sourceText.Contains("presented_panel_height = g_panel_height") -or
+    -not $sourceText.Contains("desktop_mirror_ready && g_panel_srv && (!immersive_drawn || auxiliary_panel_presented)") -or
+    -not $sourceText.Contains("presented_panel_width = settings_panel?MENU_W:g_panel_width") -or
+    -not $sourceText.Contains("presented_panel_height = settings_panel?MENU_H:g_panel_height") -or
     -not $sourceText.Contains('\"source\":\"pc_visible_desktop_mirror\"') -or
     $sourceText.Contains("set_target(owner, flat_render_texture, mi_camera_set_target)") -or
     $sourceText.Contains('\"source\":\"authored_live_monoscopic\"') -or
@@ -343,12 +371,14 @@ if (-not $sourceText.Contains("quick.OutputWindow != g_game_window") -or
     -not $sourceText.Contains("&presented_panel_srv")) {
     throw "CTRL-002 generation-safe PC-visible desktop mirror ownership regression"
 }
+if ($StaticOnly) { Write-Host 'PASS local source guards only; loader/GPU/installation tests not run'; return }
 $pe = & (Join-Path $workspace "vrmod\bootstrap_probe\tests\Inspect-Pe.ps1") -Path $ProbeDll
 if ($pe.machine -ne "0x8664" -or $pe.pe_magic -ne "0x020B" -or $pe.entry_point_rva -eq "0x00000000") { throw "PE identity failed" }
 $flags = [Convert]::ToUInt16($pe.dll_characteristics.Substring(2),16)
 if (($flags -band 0x0160) -ne 0x0160) { throw "ASLR/NX flags missing" }
 if ([string]::IsNullOrWhiteSpace($ZigPath)) { $ZigPath = Join-Path $workspace ".tmp\zig-0.16.0\zig-x86_64-windows-0.16.0\zig.exe" }
 $zig = (Resolve-Path -LiteralPath $ZigPath).Path
+& (Join-Path $PSScriptRoot "Test-Telemetry.ps1") -ZigPath $zig
 $testRoot = Join-Path $workspace (".tmp\immersive-tests\" + [Guid]::NewGuid().ToString("N")); New-Item -ItemType Directory -Path $testRoot -Force | Out-Null
 $cache = Join-Path $workspace ".tmp\zig-cache\immersive-tests"; New-Item -ItemType Directory -Path "$cache\global","$cache\local" -Force | Out-Null
 $env:ZIG_GLOBAL_CACHE_DIR = "$cache\global"; $env:ZIG_LOCAL_CACHE_DIR = "$cache\local"

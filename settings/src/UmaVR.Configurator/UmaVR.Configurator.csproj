@@ -11,6 +11,7 @@
     <Version>0.1.1</Version>
   </PropertyGroup>
   <ItemGroup>
+    <EmbeddedResource Include="Quest_03.png" LogicalName="Quest_03.png" />
     <ProjectReference Include="..\..\..\installer\src\UmaVR.Management\UmaVR.Management.csproj" />
   </ItemGroup>
 </Project>

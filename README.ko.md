@@ -1,20 +1,29 @@
 ## [English](README.md) | [한국어](README.ko.md) | [日本語](README.ja.md)
 
+## 준비물
+
+Windows 11 x64, DMM판 우마무스메, Meta Quest 컨트롤러와 PC OpenXR 환경이 필요합니다. 실기로 확인한 조합은 Direct3D 11, Virtual Desktop(VDXR), Localify 1.50.0입니다.
+
+## VR 6DoF 스테레오 지원 화면
+
+[v0.1.13 사전 릴리즈](https://github.com/deadpixel134/umamusume-vr/releases/tag/v0.1.13)에서 사용하는 화면 중, HMD를 돌리거나 실제로 몸을 옮겼을 때 시점이 따라오는 것을 확인한 화면입니다.
+
+- 홈 — 캐릭터와 배경이 함께 보이는 메인 화면
+- 라이브 — 지원되는 공연의 무대 화면
+
+육성 레이스와 캐릭터 노트의 전신 보기에서도 입체 표시를 확인했습니다. 두 화면의 물리 6DoF 동작은 개별 검증 전입니다. 의상 미리보기는 실험 단계로, 입체 진입과 가까운 거리에서 모델이 잘리는 현상을 재검증하고 있습니다.
+
 # UmaVR
 
 제작자: [@TBluebox12](https://x.com/TBluebox12)  
 아카라이브 가상현실 채널: [가상현실 채널](https://arca.live/b/vrshits)  
 후원: [buymeacoffee.com/vrshits](https://buymeacoffee.com/vrshits)
 
-우마무스메 프리티 더비 DMM판을 위한 비공식 Meta Quest/OpenXR VR 모드입니다. 검증된 Live 장면은 양안 VR과 물리 6DoF로 표시하고, 그 밖의 화면은 원본 비율을 보존한 평면 패널로 표시합니다. VR 컨트롤러로 게임 UI를 조작할 수 있습니다.
+우마무스메 프리티 더비 DMM판을 위한 비공식 Meta Quest/OpenXR VR 모드입니다. 안정판 v0.1.1에서는 검증된 Live 장면을 양안 VR과 물리 6DoF로 표시하고, 그 밖의 화면은 원본 비율을 보존한 평면 패널로 표시합니다. VR 컨트롤러로 게임 UI를 조작할 수 있습니다.
 
 Virtual Desktop의 VDXR 경로로 실기 검증했습니다. 현재 공식 버전은 **v0.1.1**입니다.
 
 [v0.1.1 다운로드](https://github.com/deadpixel134/umamusume-vr/releases/tag/v0.1.1) · [설치·업데이트·제거](docs/ko/INSTALLATION.md) · [컨트롤러 조작](docs/ko/CONTROLS.md)
-
-## 준비물
-
-Windows 11 x64, DMM판 우마무스메, Meta Quest 컨트롤러와 PC OpenXR 환경이 필요합니다. 실기로 확인한 조합은 Direct3D 11, Virtual Desktop(VDXR), Localify 1.50.0입니다.
 
 ## 1. 설치하기
 
@@ -65,7 +74,7 @@ Windows 11 x64, DMM판 우마무스메, Meta Quest 컨트롤러와 PC OpenXR 환
 
 - 검증됨: Windows 11 x64, 게임 2.30.0, Unity 2022.3.62f2, Direct3D 11, Virtual Desktop VDXR 1.0.10, Localify 1.50.0 로더 경로
 - Live: immersive stereo/6DoF/VFX/컨트롤러 지원
-- Home, Story, Race, Training, 캐릭터 미리보기: 안전한 스테레오 소유권 경로가 없어 현재 PANEL 표시
+- v0.1.1 — Home, Story, Race, Training, 캐릭터 미리보기: 안전한 스테레오 소유권 경로가 없어 현재 PANEL 표시
 - SteamVR OpenXR와 Meta Quest Link/Air Link: 예비 지원, 이 프로젝트에서 실기 미검증
 - 전체 post-processing OFF는 잔여 흐림 제거가 검증되었습니다. 일부 효과는 개별 제어가 제한되며 Aura는 개별 비활성화를 지원하지 않습니다.
 

@@ -2,7 +2,7 @@ using System.Diagnostics;
 
 namespace UmaVR.Configurator;
 
-internal sealed class MainForm : Form
+internal sealed partial class MainForm : Form
 {
     private readonly StartupResult _startup;
     private readonly UpdateService _updateService = new();
@@ -11,6 +11,17 @@ internal sealed class MainForm : Form
     private readonly NumericUpDown _worldScale = Number(0.55m, decimal.MaxValue, 0.05m, 2);
     private readonly NumericUpDown _eyeRenderScale = Number(0.50m, 1.50m, 0.05m, 2);
     private readonly Label _eyeScaleWarning = new() { AutoSize = true, MaximumSize = new Size(600, 0) };
+    // Bits 0 and 1 are reserved for the master and read-only Aura in the native catalog.
+    private static readonly string[] HomeEffects = {
+        "Blur", "DofDiffusionBloomOverlay", "DepthOfField", "Diffusion", "Bloom", "TiltShift",
+        "RadialBlur", "BgBlur", "SunShafts", "IndirectLightShafts", "TransmittedLight", "GlobalFog",
+        "ChromaticAberration", "ToneCurve", "Exposure", "ColorCorrection", "ColorGrading", "Fluctuation",
+        "LensDistortion", "Vortex", "FilmRoll", "Hatching", "LetterBox", "RainSplash"
+    };
+    private readonly CheckBox[] _homeAllow = HomeEffects.Select(_ => TaggedCheckBox("SceneDefault")).ToArray();
+    private int _homeReserved;
+    private readonly TabPage _homeTab = new() { Tag = "HomeEffects", AutoScroll = true };
+    private readonly CheckBox _homePost = TaggedCheckBox("HomePost");
     private readonly CheckBox _postProcessingEnabled = TaggedCheckBox("PostProcessingEnabled");
     private readonly CheckBox _blurEnabled = TaggedCheckBox("BlurEnabled");
     private readonly CheckBox _depthOfFieldEnabled = TaggedCheckBox("DepthOfFieldEnabled");
@@ -43,12 +54,31 @@ internal sealed class MainForm : Form
         TaggedCheckBox("LocomotionScaleCompensationEnabled");
     private readonly CheckBox _snapTurnEnabled = TaggedCheckBox("SnapTurnEnabled");
     private readonly NumericUpDown _snapTurnAngle = Number(15m, 90m, 5m, 0);
-    private readonly CheckBox _navigationHandsSwapped = TaggedCheckBox("HandSwapEnabled");
+    private readonly ComboBox _movementSticks = new() { DropDownStyle = ComboBoxStyle.DropDownList };
+    private readonly ComboBox _grabHand = new() { DropDownStyle = ComboBoxStyle.DropDownList };
+    private readonly ComboBox _grabButton = new() { DropDownStyle = ComboBoxStyle.DropDownList };
+    private readonly NumericUpDown _movementDeadzone = Number(0, 0.90m, 0.05m, 2);
+    private readonly CheckBox _showHands = TaggedCheckBox("ShowHands");
+    private readonly CheckBox _contactEnabled = TaggedCheckBox("Enabled");
+    private readonly CheckBox _contactMotion = TaggedCheckBox("Enabled");
+    private readonly NumericUpDown _contactStrength = Number(0m, 100m, 5m, 0);
+    private readonly NumericUpDown _contactTilt = Number(0m, 100m, 5m, 0);
+    private readonly NumericUpDown _contactDuration = Number(0.5m, 2m, 0.05m, 2);
+    private readonly NumericUpDown _handRadius = Number(10, 50, 1, 0);
+    private readonly NumericUpDown _contactHold = Number(0, 250, 5, 0);
+    private readonly NumericUpDown _contactReach = Number(50m, 200m, 5m, 0);
+    private readonly CheckBox _contactHaptics = TaggedCheckBox("Enabled");
+    private readonly NumericUpDown _hapticStrength = Number(0m, 100m, 1m, 0);
+    private readonly NumericUpDown _hapticDuration = Number(0m, 250m, 5m, 0);
+    private readonly CheckBox _showContact = TaggedCheckBox("ShowContact");
+    private readonly ComboBox _panelHands = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 280 };
     private readonly ToolStripStatusLabel _status = new();
     private readonly Button _checkUpdates;
-    private readonly TabPage _cameraTab = new() { Tag = "TabCamera", AutoScroll = true };
+    private readonly TabPage _spatialTab = new() { Tag = "TabSpatial", AutoScroll = true };
     private readonly TabPage _renderTab = new() { Tag = "TabRender", AutoScroll = true };
-    private readonly TabPage _controllerTab = new() { Tag = "TabController", AutoScroll = true };
+    private readonly TabPage _controllerTab = new() { Tag = "TabInput", AutoScroll = true };
+    private readonly TabPage _panelTab = new() { Tag = "TabPanel", AutoScroll = true };
+    private readonly TabPage _contactTab = new() { Tag = "Contact", AutoScroll = true };
     private bool _statusOverridden;
 
     public MainForm(StartupResult startup)
@@ -57,7 +87,8 @@ internal sealed class MainForm : Form
         _checkUpdates = TaggedButton("CheckUpdates", CheckUpdates);
         StartPosition = FormStartPosition.CenterScreen;
         MinimumSize = new Size(760, 500);
-        ClientSize = new Size(920, 620);
+        Size area = Screen.FromPoint(Cursor.Position).WorkingArea.Size;
+        Size = new Size(Math.Min(1180, area.Width), Math.Min(900, area.Height));
         AutoScaleMode = AutoScaleMode.Dpi;
 
         TableLayoutPanel root = new()
@@ -83,12 +114,17 @@ internal sealed class MainForm : Form
         root.Controls.Add(gameRow, 0, 0);
 
         TabControl tabs = new() { Dock = DockStyle.Fill };
-        BuildCameraTab();
+        BuildSpatialTab();
         BuildRenderTab();
         BuildControllerTab();
-        tabs.TabPages.Add(_cameraTab);
-        tabs.TabPages.Add(_renderTab);
-        tabs.TabPages.Add(_controllerTab);
+        _panelHands.SelectedIndexChanged += (_, _) => UpdateStickChoices();
+        BuildPanelTab();
+        BuildContactTab();
+        tabs.TabPages.AddRange([_renderTab, _homeTab, _spatialTab, _panelTab, _controllerTab, _contactTab]);
+        tabs.Selecting += (_, args) =>
+        {
+            if (args.TabPage == _contactTab && !ConfirmContactConsent()) args.Cancel = true;
+        };
         root.Controls.Add(tabs, 0, 1);
 
         TableLayoutPanel footer = new()
@@ -134,6 +170,10 @@ internal sealed class MainForm : Form
 
         StatusStrip statusStrip = new();
         statusStrip.Items.Add(_status);
+        statusStrip.Items.AddRange([_updateStatus, _applyUpdate, _releasePage]);
+        _applyUpdate.Click += async (_, _) => await ApplyUpdateAsync();
+        _releasePage.Click += (_, _) => Run("StatusReady", OpenRelease);
+        _gameRoot.TextChanged += (_, _) => ResetUpdate();
         root.Controls.Add(statusStrip, 0, 3);
 
         _gameRoot.Text = SettingsStore.FindInitialGameRoot();
@@ -147,19 +187,21 @@ internal sealed class MainForm : Form
     {
         if (disposing)
         {
+            _updateCancellation?.Cancel();
             _updateService.Dispose();
         }
         base.Dispose(disposing);
     }
 
-    private void BuildCameraTab()
+    private void BuildSpatialTab()
     {
         TableLayoutPanel grid = Grid();
+        AddRow(grid, "WorldScale", _worldScale);
+        AddNote(grid, "SpatialHelp");
         AddNote(grid, "CameraSupport");
         AddSection(grid, "CameraControlsGroup");
         AddRow(grid, "Live", _liveCameraFollow);
-        AddRow(grid, "WorldScale", _worldScale);
-        _cameraTab.Controls.Add(grid);
+        _spatialTab.Controls.Add(grid);
     }
 
     private void BuildRenderTab()
@@ -176,6 +218,12 @@ internal sealed class MainForm : Form
         AddRow(grid, "EyeRenderScale", scalePanel);
 
         AddNote(grid, "PostProcessingSupport");
+        TableLayoutPanel home = Grid();
+        AddRow(home, "HomeEffects", _homePost);
+        AddNote(home, "HomeEffectHelp");
+        for (int i = 0; i < HomeEffects.Length; i++)
+            AddRow(home, HomeEffects[i], _homeAllow[i]);
+        _homeTab.Controls.Add(home);
         AddRow(grid, "PostProcessing", _postProcessingEnabled);
 
         AddSection(grid, "VfxFocusGroup");
@@ -216,14 +264,73 @@ internal sealed class MainForm : Form
     private void BuildControllerTab()
     {
         TableLayoutPanel grid = Grid();
+        AddRow(grid, "SwapMovementSticks", _movementSticks);
         AddRow(grid, "Locomotion", _locomotionEnabled);
         AddRow(grid, "LocomotionSpeed", _locomotionSpeed);
         AddRow(grid, "LocomotionScaleCompensation", _locomotionScaleCompensationEnabled);
         AddRow(grid, "SnapTurn", _snapTurnEnabled);
         AddRow(grid, "SnapAngle", _snapTurnAngle);
-        AddRow(grid, "HandSwap", _navigationHandsSwapped);
-        AddNote(grid, "ControllerDescription");
+        AddRow(grid, "MovementDeadzone", _movementDeadzone);
+        AddSection(grid, "GrabGroup");
+        AddRow(grid, "GrabUsesTrigger", _grabButton);
+        AddRow(grid, "GrabTracksPanelHand", _grabHand);
+        AddRow(grid, "Hands", _showHands);
+        AddRow(grid, "ControlsGuide", TaggedButton("ControlsGuide", ShowControlsGuide));
         _controllerTab.Controls.Add(grid);
+    }
+
+    private static void SetChoices(ComboBox box, string first, string second)
+    {
+        int previous = Math.Max(0, box.SelectedIndex);
+        box.Items.Clear();
+        box.Items.AddRange([UiText.Get(first), UiText.Get(second)]);
+        box.SelectedIndex = previous;
+    }
+
+    private void UpdateStickChoices()
+    {
+        bool swapped = _panelHands.SelectedIndex == 1;
+        SetChoices(_movementSticks, swapped ? "MoveLeft" : "MoveRight", swapped ? "MoveRight" : "MoveLeft");
+    }
+
+    private void BuildPanelTab()
+    {
+        TableLayoutPanel grid = Grid();
+        AddRow(grid, "HandSwap", _panelHands);
+        AddNote(grid, "PanelHandsHelp");
+        AddNote(grid, "PanelActions");
+        _panelTab.Controls.Add(grid);
+    }
+
+    private void BuildContactTab()
+    {
+        TableLayoutPanel grid = Grid();
+        AddRow(grid, "ContactEnabled", _contactEnabled);
+        AddRow(grid, "Contact", _showContact);
+        AddRow(grid, "ContactHandRadiusMm", _handRadius);
+        AddRow(grid, "ContactHoldMs", _contactHold);
+        AddRow(grid, "ContactReach", _contactReach);
+        AddSection(grid, "ResponseGroup");
+        AddRow(grid, "ContactMotion", _contactMotion);
+        AddRow(grid, "ContactStrength", _contactStrength);
+        AddRow(grid, "ContactTilt", _contactTilt);
+        AddRow(grid, "ContactDuration", _contactDuration);
+        AddSection(grid, "FeedbackGroup");
+        AddRow(grid, "ContactHaptics", _contactHaptics);
+        AddRow(grid, "HapticStrength", _hapticStrength);
+        AddRow(grid, "HapticDuration", _hapticDuration);
+        _contactTab.Controls.Add(grid);
+        void RefreshAvailability()
+        {
+            bool enabled = _contactEnabled.Checked;
+            _contactHold.Enabled = _handRadius.Enabled = _showContact.Enabled = _contactReach.Enabled = _contactMotion.Enabled = _contactHaptics.Enabled = enabled;
+            _contactStrength.Enabled = _contactTilt.Enabled = _contactDuration.Enabled = enabled && _contactMotion.Checked;
+            _hapticStrength.Enabled = _hapticDuration.Enabled = enabled && _contactHaptics.Checked;
+        }
+        _contactEnabled.CheckedChanged += (_, _) => RefreshAvailability();
+        _contactMotion.CheckedChanged += (_, _) => RefreshAvailability();
+        _contactHaptics.CheckedChanged += (_, _) => RefreshAvailability();
+        RefreshAvailability();
     }
 
     internal static void VerifyLocalizedLayout()
@@ -238,9 +345,33 @@ internal sealed class MainForm : Form
                 form.ClientSize = new Size(760, 500);
                 form.CreateControl();
                 form.PerformLayout();
-                VerifyGridCells(form._cameraTab, language);
-                VerifyGridCells(form._renderTab, language);
-                VerifyGridCells(form._controllerTab, language);
+                var tabs = (TabControl)form._renderTab.Parent!;
+                foreach (TabPage page in tabs.TabPages)
+                {
+                    // The consent dialog requires an explicit user action; inspect each grid directly.
+                    VerifyGridCells(page, language);
+                }
+                var values = VrSettings.CreateDefaults();
+                values.HomeVfxDisabled = (1 << 25) | (1 << 3) | 2;
+                form.Apply(values);
+                if (form._homeAllow[23].Checked || form._homeAllow[1].Checked || !form._homeAllow[0].Checked ||
+                    form.Read().HomeVfxDisabled != values.HomeVfxDisabled) throw new InvalidOperationException("Home VFX mask round-trip");
+                foreach (bool swapped in new[] { false, true })
+                {
+                    values.NavigationHandsSwapped = swapped;
+                    form.Apply(values);
+                    foreach (bool swapSticks in new[] { false, true })
+                    {
+                        form._movementSticks.SelectedIndex = swapSticks ? 1 : 0;
+                        if (form._movementSticks.Text != UiText.Get(swapped != swapSticks ? "MoveLeft" : "MoveRight") ||
+                            form.Read().SwapMovementSticks != swapSticks)
+                            throw new InvalidOperationException("Physical stick assignment mismatch");
+                    }
+                    form.ApplyLanguage(languageChanged: true);
+                    if (form.Read().NavigationHandsSwapped != swapped ||
+                        form._panelHands.Text != UiText.Get(swapped ? "PanelRight" : "PanelLeft"))
+                        throw new InvalidOperationException("Panel hand selection round-trip");
+                }
             }
         }
         finally
@@ -284,7 +415,16 @@ internal sealed class MainForm : Form
     private void ApplyLanguage(bool languageChanged)
     {
         Text = UiText.Get("AppTitle");
+        int handChoice = Math.Max(0, _panelHands.SelectedIndex);
+        _panelHands.Items.Clear();
+        _panelHands.Items.AddRange([UiText.Get("PanelLeft"), UiText.Get("PanelRight")]);
+        _panelHands.SelectedIndex = handChoice;
+        UpdateStickChoices();
+        SetChoices(_grabButton, "GripChoice", "TriggerChoice");
+        SetChoices(_grabHand, "PointerChoice", "PanelChoice");
         UpdateTaggedText(this);
+        _applyUpdate.Text = UiText.Get("ApplyUpdate");
+        _releasePage.Text = UiText.Get("ReleasePage");
         EnsureCheckBoxTextFits(this);
         UpdateEyeScaleWarning();
         _status.Text = UiText.Get(languageChanged ? "StatusLanguageChanged" : "StatusReady");
@@ -338,6 +478,7 @@ internal sealed class MainForm : Form
     {
         VrSettingsValidation loaded = SettingsStore.LoadFromGameRoot(_gameRoot.Text);
         Apply(loaded.Settings);
+        _savedValues = SnapshotValues();
         if (loaded.UsedFallback)
         {
             _status.Text = UiText.Format("InvalidValues", string.Join(", ", loaded.Issues));
@@ -345,7 +486,11 @@ internal sealed class MainForm : Form
         }
     }
 
-    private void SaveSettings() => SettingsStore.SaveToGameRoot(_gameRoot.Text, Read());
+    private void SaveSettings()
+    {
+        SettingsStore.SaveToGameRoot(_gameRoot.Text, Read());
+        _savedValues = SnapshotValues();
+    }
 
     private async Task HandleStartupAsync()
     {
@@ -364,60 +509,7 @@ internal sealed class MainForm : Form
 
     private async void CheckUpdates() => await CheckForUpdatesAsync(manual: true);
 
-    private async Task CheckForUpdatesAsync(bool manual)
-    {
-        if (!_checkUpdates.Enabled)
-        {
-            return;
-        }
-
-        _checkUpdates.Enabled = false;
-        try
-        {
-            _status.Text = UiText.Get("UpdateChecking");
-            AvailableUpdate? update = await _updateService.CheckAsync(CancellationToken.None);
-            if (update is null)
-            {
-                _status.Text = UiText.Format("UpdateCurrent", UpdateService.CurrentVersion);
-                return;
-            }
-            if (UpdateService.IsGameRunning())
-            {
-                _status.Text = UiText.Format("UpdateDeferredGameRunning", update.Version);
-                if (manual)
-                {
-                    MessageBox.Show(this, _status.Text, UiText.Get("AppTitle"),
-                        MessageBoxButtons.OK, MessageBoxIcon.Information);
-                }
-                return;
-            }
-
-            _status.Text = UiText.Format("UpdateAvailable", update.Version);
-            Progress<string> progress = new(message => _status.Text = message);
-            StagedUpdate staged = await _updateService.StageAsync(
-                update, _gameRoot.Text, progress, CancellationToken.None);
-            _status.Text = UiText.Format("UpdateInstalling", update.Version);
-            LaunchAutomaticUpdater(staged);
-        }
-        catch (Exception exception)
-        {
-            _status.Text = UiText.Format("UpdateFailed", exception.Message);
-            if (manual)
-            {
-                MessageBox.Show(this, _status.Text, UiText.Get("AppTitle"),
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-        }
-        finally
-        {
-            if (!IsDisposed)
-            {
-                _checkUpdates.Enabled = true;
-            }
-        }
-    }
-
-    private void LaunchAutomaticUpdater(StagedUpdate update)
+    private void LaunchAutomaticUpdater(StagedUpdate update, string game)
     {
         ProcessStartInfo start = new(update.InstallerPath)
         {
@@ -426,7 +518,7 @@ internal sealed class MainForm : Form
         };
         start.ArgumentList.Add("--auto-update");
         start.ArgumentList.Add("--game-root");
-        start.ArgumentList.Add(Path.GetFullPath(_gameRoot.Text));
+        start.ArgumentList.Add(game);
         start.ArgumentList.Add("--package-root");
         start.ArgumentList.Add(update.PackageRoot);
         start.ArgumentList.Add("--cleanup-update");
@@ -475,7 +567,26 @@ internal sealed class MainForm : Form
         LocomotionScaleCompensationEnabled = _locomotionScaleCompensationEnabled.Checked,
         SnapTurnEnabled = _snapTurnEnabled.Checked,
         SnapTurnAngleDegrees = (float)_snapTurnAngle.Value,
-        NavigationHandsSwapped = _navigationHandsSwapped.Checked,
+        SwapMovementSticks = _movementSticks.SelectedIndex == 1,
+        GrabTracksPanelHand = _grabHand.SelectedIndex == 1,
+        GrabUsesTrigger = _grabButton.SelectedIndex == 1,
+        MovementDeadzone = (float)_movementDeadzone.Value,
+        ShowControllerHands = _showHands.Checked,
+        ContactEnabled = _contactEnabled.Checked,
+        ContactMotion = _contactMotion.Checked,
+        ContactStrength = (float)_contactStrength.Value,
+        ContactTilt = (float)_contactTilt.Value,
+        ContactDuration = (float)_contactDuration.Value,
+        ContactHandRadiusMm = (float)_handRadius.Value,
+        ContactHoldMs = (float)_contactHold.Value,
+        ContactReach = (float)_contactReach.Value,
+        ContactHaptics = _contactHaptics.Checked,
+        HapticStrength = (float)_hapticStrength.Value,
+        HapticDuration = (float)_hapticDuration.Value,
+        ShowContactLocations = _showContact.Checked,
+        NavigationHandsSwapped = _panelHands.SelectedIndex == 1,
+        HomeVfxDisabled = _homeAllow.Select((box, i) => box.Checked ? 0 : 1 << (i + 2)).Aggregate(_homeReserved, (mask, bit) => mask | bit),
+        HomePostProcessingEnabled = _homePost.Checked,
         PostProcessingEnabled = _postProcessingEnabled.Checked,
         BlurEnabled = _blurEnabled.Checked,
         DepthOfFieldEnabled = _depthOfFieldEnabled.Checked,
@@ -517,7 +628,28 @@ internal sealed class MainForm : Form
         _snapTurnEnabled.Checked = settings.SnapTurnEnabled;
         _snapTurnAngle.Value = Math.Clamp((decimal)settings.SnapTurnAngleDegrees,
             _snapTurnAngle.Minimum, _snapTurnAngle.Maximum);
-        _navigationHandsSwapped.Checked = settings.NavigationHandsSwapped;
+        _movementSticks.SelectedIndex = settings.SwapMovementSticks ? 1 : 0;
+        _grabHand.SelectedIndex = settings.GrabTracksPanelHand ? 1 : 0;
+        _grabButton.SelectedIndex = settings.GrabUsesTrigger ? 1 : 0;
+        _movementDeadzone.Value = (decimal)settings.MovementDeadzone;
+        _showHands.Checked = settings.ShowControllerHands;
+        _contactEnabled.Checked = settings.ContactEnabled;
+        _contactMotion.Checked = settings.ContactMotion;
+        _contactStrength.Value = (decimal)settings.ContactStrength;
+        _contactTilt.Value = (decimal)settings.ContactTilt;
+        _contactDuration.Value = (decimal)settings.ContactDuration;
+        _handRadius.Value = (decimal)settings.ContactHandRadiusMm;
+        _contactHold.Value = (decimal)settings.ContactHoldMs;
+        _contactReach.Value = (decimal)settings.ContactReach;
+        _contactHaptics.Checked = settings.ContactHaptics;
+        _hapticStrength.Value = (decimal)settings.HapticStrength;
+        _hapticDuration.Value = (decimal)settings.HapticDuration;
+        _showContact.Checked = settings.ShowContactLocations;
+        _panelHands.SelectedIndex = settings.NavigationHandsSwapped ? 1 : 0;
+        _homeReserved = settings.HomeVfxDisabled & 3;
+        for (int i = 0; i < _homeAllow.Length; i++)
+            _homeAllow[i].Checked = (settings.HomeVfxDisabled & (1 << (i + 2))) == 0;
+        _homePost.Checked = settings.HomePostProcessingEnabled;
         _postProcessingEnabled.Checked = settings.PostProcessingEnabled;
         _blurEnabled.Checked = settings.BlurEnabled;
         _depthOfFieldEnabled.Checked = settings.DepthOfFieldEnabled;
@@ -597,7 +729,20 @@ internal sealed class MainForm : Form
     {
         int row = grid.RowCount++;
         grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        grid.Controls.Add(TaggedLabel(labelKey), 0, row);
+        var label = TaggedLabel(labelKey);
+        if (UiText.Has(labelKey + "HelpText"))
+        {
+            var description = TaggedLabel(labelKey + "HelpText");
+            description.MaximumSize = new Size(350, 0);
+            description.ForeColor = SystemColors.GrayText;
+            label.Margin = new Padding(3, 6, 3, 0);
+            description.Margin = new Padding(3, 0, 3, 5);
+            var stack = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false };
+            stack.Controls.Add(label);
+            stack.Controls.Add(description);
+            grid.Controls.Add(stack, 0, row);
+        }
+        else grid.Controls.Add(label, 0, row);
         control.Margin = new Padding(3, 4, 3, 4);
         control.Anchor = control is CheckBox
             ? AnchorStyles.Left

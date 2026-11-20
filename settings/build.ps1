@@ -1,16 +1,16 @@
 [CmdletBinding()]
-param()
+param([string]$OutputDirectory = (Join-Path $PSScriptRoot "build\publish"))
 
 $ErrorActionPreference = "Stop"
 $project = Join-Path $PSScriptRoot "src\UmaVR.Configurator\UmaVR.Configurator.csproj"
-$output = Join-Path $PSScriptRoot "build\publish"
+$output = $OutputDirectory
 dotnet publish $project -c Release -r win-x64 --self-contained false -o $output
 if ($LASTEXITCODE) { throw "dotnet publish failed: $LASTEXITCODE" }
-& (Join-Path $output "UmaVR.Configurator.exe") --self-test
+& (Join-Path $output "UmaVR.Configurator.exe") --self-test | Out-Null
 if ($LASTEXITCODE) { throw "configurator self-test failed: $LASTEXITCODE" }
-& (Join-Path $output "UmaVR.Configurator.exe") --verify-localization
+& (Join-Path $output "UmaVR.Configurator.exe") --verify-localization | Out-Null
 if ($LASTEXITCODE) { throw "configurator localization verification failed: $LASTEXITCODE" }
-& (Join-Path $output "UmaVR.Configurator.exe") --verify-layout
+& (Join-Path $output "UmaVR.Configurator.exe") --verify-layout | Out-Null
 if ($LASTEXITCODE) { throw "configurator localized layout verification failed: $LASTEXITCODE" }
 $artifact = Get-Item -LiteralPath (Join-Path $output "UmaVR.Configurator.exe")
 $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $artifact.FullName).Hash

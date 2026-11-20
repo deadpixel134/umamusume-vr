@@ -9,6 +9,8 @@ public enum LocalifyStatus
 
 public sealed class PackageManifest
 {
+    public int UpdateLayoutVersion { get; set; }
+
     public int SchemaVersion { get; set; }
 
     public string Version { get; set; } = string.Empty;

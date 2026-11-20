@@ -33,13 +33,32 @@ internal sealed class VrSettings
 
     public float SnapTurnAngleDegrees { get; set; } = DefaultSnapTurnAngleDegrees;
 
+    public bool SwapMovementSticks { get; set; } = true;
+    public bool GrabTracksPanelHand { get; set; }
+    public bool GrabUsesTrigger { get; set; }
+    public float MovementDeadzone { get; set; } = 0.25f;
+    public bool ShowControllerHands { get; set; } = true;
+    public bool ContactEnabled { get; set; } = true;
+    public bool ContactMotion { get; set; } = true;
+    public float ContactStrength { get; set; } = 100;
+    public float ContactTilt { get; set; } = 100;
+    public float ContactDuration { get; set; } = 1;
+    public float ContactHandRadiusMm { get; set; } = 13;
+    public float ContactHoldMs { get; set; } = 100;
+    public float ContactReach { get; set; } = 100;
+    public bool ContactHaptics { get; set; } = true;
+    public float HapticStrength { get; set; } = 22;
+    public float HapticDuration { get; set; } = 35;
+    public bool ShowContactLocations { get; set; } = true;
     public bool NavigationHandsSwapped { get; set; }
 
+    public int HomeVfxDisabled { get; set; }
+    public bool HomePostProcessingEnabled { get; set; } = true;
     public bool PostProcessingEnabled { get; set; } = true;
 
     public bool BlurEnabled { get; set; } = true;
 
-    public bool DepthOfFieldEnabled { get; set; } = true;
+    public bool DepthOfFieldEnabled { get; set; }
 
     public bool DiffusionEnabled { get; set; } = true;
 
@@ -141,7 +160,26 @@ internal static class VrSettingsValidator
                     source.SchemaVersion >= 10 && source.LocomotionScaleCompensationEnabled,
                 SnapTurnEnabled = source.SnapTurnEnabled,
                 SnapTurnAngleDegrees = snapAngle,
+                SwapMovementSticks = source.SwapMovementSticks,
+                GrabTracksPanelHand = source.GrabTracksPanelHand,
+                GrabUsesTrigger = source.GrabUsesTrigger,
+                MovementDeadzone = float.IsFinite(source.MovementDeadzone) ? Math.Clamp(source.MovementDeadzone, 0, 0.9f) : 0.25f,
+                ShowControllerHands = source.ShowControllerHands,
+                ContactEnabled = source.ContactEnabled,
+                ContactMotion = source.ContactMotion,
+                ContactStrength = source.ContactStrength is >= 0f and <= 100f ? source.ContactStrength : 100f,
+                ContactTilt = source.ContactTilt is >= 0f and <= 100f ? source.ContactTilt : 100f,
+                ContactDuration = source.ContactDuration is >= 0.5f and <= 2f ? source.ContactDuration : 1f,
+                ContactHandRadiusMm = source.ContactHandRadiusMm is >= 10 and <= 50 ? source.ContactHandRadiusMm : 13,
+                ContactHoldMs = source.ContactHoldMs is >= 0 and <= 250 ? source.ContactHoldMs : 100,
+                ContactReach = source.ContactReach is >= 50f and <= 200f ? source.ContactReach : 100f,
+                ContactHaptics = source.ContactHaptics,
+                HapticStrength = source.HapticStrength is >= 0f and <= 100f ? source.HapticStrength : 22f,
+                HapticDuration = source.HapticDuration is >= 0f and <= 250f ? source.HapticDuration : 35f,
+                ShowContactLocations = source.ShowContactLocations,
                 NavigationHandsSwapped = source.NavigationHandsSwapped,
+                HomeVfxDisabled = source.HomeVfxDisabled is >= 0 and < (1 << 26) ? source.HomeVfxDisabled : 0,
+                HomePostProcessingEnabled = source.HomePostProcessingEnabled,
                 PostProcessingEnabled = source.SchemaVersion < 6 || source.PostProcessingEnabled,
                 BlurEnabled = source.SchemaVersion < 4 || source.BlurEnabled,
                 DepthOfFieldEnabled = source.SchemaVersion < 4 || source.DepthOfFieldEnabled,

@@ -1,19 +1,28 @@
 ## [English](README.md) | [한국어](README.ko.md) | [日本語](README.ja.md)
 
+## Requirements
+
+Windows 11 x64, the DMM edition of Umamusume, Meta Quest controllers and a working PC OpenXR connection. The tested setup uses Direct3D 11, Virtual Desktop (VDXR) and Localify 1.50.0.
+
+## Screens with VR 6DoF stereo
+
+In [v0.1.13 (prerelease)](https://github.com/deadpixel134/umamusume-vr/releases/tag/v0.1.13), these screens have been checked in a headset with physical head rotation and translation:
+
+- Home — the main screen with the character and background.
+- Live — supported concert performances, once the stage appears.
+
+Stereo rendering has also been observed during Career races and in the full-body view in Character Notes. Physical 6DoF has yet to be verified separately on those screens. Outfit Preview is experimental and is being retested for stereo entry and close-up clipping.
+
 # UmaVR
 
 Creator: [@TBluebox12](https://x.com/TBluebox12)  
 Support: [buymeacoffee.com/vrshits](https://buymeacoffee.com/vrshits)
 
-UmaVR is an unofficial Meta Quest/OpenXR VR mod for the DMM release of Umamusume: Pretty Derby. Validated Live scenes use binocular VR and physical 6DoF; all other screens remain the complete aspect-correct original game image on a flat panel. The game UI can be operated with VR controllers.
+UmaVR is an unofficial Meta Quest/OpenXR VR mod for the DMM release of Umamusume: Pretty Derby. In stable v0.1.1, validated Live scenes use binocular VR and physical 6DoF; all other screens remain the complete aspect-correct original game image on a flat panel. The game UI can be operated with VR controllers.
 
 The Virtual Desktop VDXR route has been tested on hardware. The current official version is **v0.1.1**.
 
 [Download v0.1.1](https://github.com/deadpixel134/umamusume-vr/releases/tag/v0.1.1) · [Install, update or remove](docs/en/INSTALLATION.md) · [Controller guide](docs/en/CONTROLS.md)
-
-## Requirements
-
-Windows 11 x64, the DMM edition of Umamusume, Meta Quest controllers and a working PC OpenXR connection. The tested setup uses Direct3D 11, Virtual Desktop (VDXR) and Localify 1.50.0.
 
 ## 1. Install
 
@@ -64,7 +73,7 @@ If a panel is visible but clicks do nothing, focus the game window on your PC. I
 
 - Validated: Windows 11 x64, game 2.30.0, Unity 2022.3.62f2, Direct3D 11, Virtual Desktop VDXR 1.0.10 and the Localify 1.50.0 loader route
 - Live supports immersive stereo, 6DoF, VFX and controllers.
-- Home, Story, Race, Training and character preview remain PANEL because no safe stereo ownership route is available.
+- v0.1.1 — Home, Story, Race, Training and character preview remain PANEL because no safe stereo ownership route is available.
 - SteamVR OpenXR and Meta Quest Link/Air Link are provisional and have not been tested in this project.
 
 The current release requires an existing compatible `localify.dll` and its `config.json` `externalDlls` loader. If it is not detected, use the [official Localify installation guide](https://github.com/Kimjio/umamusume-localify) linked by the installer. Public GitHub Releases are accessed without authentication, and no reusable GitHub credential is shipped.

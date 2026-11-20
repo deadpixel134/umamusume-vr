@@ -80,6 +80,19 @@ internal static class InstallerSelfTest
                 "UmaVR\\immersive\\umavr_immersive.dll", StringComparison.OrdinalIgnoreCase) == true),
                 "UmaVR bootstrap registration");
 
+            string runtimePath = Path.Combine(game, "UmaVR", "immersive", "umavr_immersive.dll");
+            string oldHash = ReleaseUpdatePolicy.FileSha256(runtimePath);
+            string oldRegistration = File.ReadAllText(Path.Combine(game, "config.json"));
+            string newerPackage = CreatePackage(runRoot, "0.1.1");
+            InstallationResult upgraded = engine.Install(game, newerPackage);
+            Assert(upgraded.Version == "0.1.1" && oldHash != ReleaseUpdatePolicy.FileSha256(runtimePath),
+                "upgrade changes runtime bytes");
+            Assert(File.ReadAllText(existingSettings) == "user-settings-sentinel", "upgrade preserves settings");
+            InstallationResult restored = engine.Uninstall(game);
+            Assert(restored.RestoredPreviousVersion && restored.RestoredVersion == "0.1.0" &&
+                oldHash == ReleaseUpdatePolicy.FileSha256(runtimePath), "previous runtime restored");
+            Assert(File.ReadAllText(Path.Combine(game, "config.json")) == oldRegistration,
+                "previous bootstrap registration restored");
             InstallationResult removed = engine.Uninstall(game);
             Assert(removed.Warnings.Count == 0, "clean uninstall warnings");
             Assert(!File.Exists(Path.Combine(game, "UmaVR", "immersive", "umavr_immersive.dll")),
@@ -88,6 +101,7 @@ internal static class InstallerSelfTest
             Assert(File.ReadAllText(Path.Combine(game, "config.json")) == originalConfig,
                 "byte-exact bootstrap rollback");
 
+            VerifyLayoutMigration(runRoot, package, newerPackage);
             string noLoader = CreateGame(runRoot, "no-loader", withLoader: false);
             ExpectCode(() => engine.Install(noLoader, package), "LocalifyRequired");
             Assert(!Directory.Exists(Path.Combine(noLoader, "UmaVR")), "loader failure leaves game unchanged");
@@ -111,6 +125,40 @@ internal static class InstallerSelfTest
         }
     }
 
+    private static void VerifyLayoutMigration(string root, string oldPackage, string newerPackage)
+    {
+        var engine = new InstallationEngine();
+        string game = CreateGame(root, "layout-change", withLoader: true);
+        string manifestPath = Path.Combine(oldPackage, "package-manifest.json");
+        var manifest = JsonNode.Parse(File.ReadAllText(manifestPath))!.AsObject();
+        const string oldPath = "vrmod/tools/legacy/runtime.dll";
+        string source = Path.Combine(oldPackage, "payload", oldPath);
+        Directory.CreateDirectory(Path.GetDirectoryName(source)!);
+        File.WriteAllText(source, "owned legacy dependency");
+        manifest["files"]!.AsArray().Add(new JsonObject { ["path"] = oldPath, ["sha256"] = ReleaseUpdatePolicy.FileSha256(source) });
+        File.WriteAllText(manifestPath, manifest.ToJsonString());
+        ExpectCode(() => engine.Install(game, newerPackage, automaticUpdate: true), "UpdateLayoutManual");
+        engine.Install(game, oldPackage);
+        string legacy = Path.Combine(game, oldPath);
+        string state = Path.Combine(game, "vrmod/install-state.json");
+        string previous = File.ReadAllText(state);
+        string sentinel = Path.Combine(Path.GetDirectoryName(legacy)!, "other.dll");
+        File.WriteAllText(sentinel, "third party");
+        File.AppendAllText(legacy, "user edit");
+        ExpectCode(() => engine.Install(game, newerPackage, automaticUpdate: true), "UpdateLayoutManual");
+        Assert(File.ReadAllText(state) == previous && File.ReadAllText(legacy).EndsWith("user edit"), "modified legacy install retained");
+        File.Copy(source, legacy, true);
+        engine.VerifyAutomaticUpdate(game, newerPackage);
+        engine.Install(game, newerPackage, automaticUpdate: true);
+        Assert(!File.Exists(legacy) && File.ReadAllText(sentinel) == "third party", "only verified obsolete tool retired");
+        File.WriteAllText(legacy, "new foreign file");
+        ExpectCode(() => engine.Uninstall(game), "UpdateLayoutManual");
+        Assert(File.ReadAllText(legacy) == "new foreign file", "rollback collision retained");
+        File.Delete(legacy);
+        engine.Uninstall(game);
+        Assert(File.ReadAllText(state) == previous && File.ReadAllText(legacy) == File.ReadAllText(source), "old layout restored exactly");
+    }
+
     private static string CreateGame(string root, string name, bool withLoader)
     {
         string game = Path.Combine(root, name);
@@ -128,15 +176,16 @@ internal static class InstallerSelfTest
         return game;
     }
 
-    private static string CreatePackage(string root)
+    private static string CreatePackage(string root, string version = "0.1.0")
     {
-        string package = Path.Combine(root, "package");
+        string package = Path.Combine(root, "package-" + version);
         string payload = Path.Combine(package, "payload");
         Directory.CreateDirectory(payload);
         PackageManifest manifest = new()
         {
             SchemaVersion = 1,
-            Version = "0.1.0",
+            UpdateLayoutVersion = 1,
+            Version = version,
             Loader = "localify-external-dll",
             LocalifyPolicy = "require-compatible-existing",
         };
@@ -144,7 +193,7 @@ internal static class InstallerSelfTest
         {
             string path = Path.Combine(payload, relative.Replace('/', Path.DirectorySeparatorChar));
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.WriteAllText(path, relative);
+            File.WriteAllText(path, version + "/" + relative);
             manifest.Files.Add(new PackageFile
             {
                 Path = relative,
