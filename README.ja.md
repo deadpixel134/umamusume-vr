@@ -1,5 +1,16 @@
 ## [English](README.md) | [한국어](README.ko.md) | [日本語](README.ja.md)
 
+# UmaVR
+
+制作者: [@TBluebox12](https://x.com/TBluebox12)  
+支援: [buymeacoffee.com/vrshits](https://buymeacoffee.com/vrshits)
+
+UmaVRは、DMM版『ウマ娘 プリティーダービー』向けの非公式Meta Quest/OpenXR VR Modです。VRコントローラーでゲームUIを操作できます。
+
+Virtual DesktopのVDXR経路で実機検証済みです。現在の公式バージョンは**v0.1.13**です。
+
+[v0.1.13をダウンロード](https://github.com/deadpixel134/umamusume-vr/releases/tag/v0.1.13) · [インストール・更新・削除](docs/ja/INSTALLATION.md) · [操作ガイド](docs/ja/CONTROLS.md)
+
 ## 必要環境
 
 Windows 11 x64、DMM版ウマ娘、Meta Questコントローラー、PC OpenXR環境が必要です。実機で確認した構成はDirect3D 11、Virtual Desktop（VDXR）、Localify 1.50.0です。
@@ -12,17 +23,6 @@ Windows 11 x64、DMM版ウマ娘、Meta Questコントローラー、PC OpenXR�
 - ライブ — 対応する公演のステージ画面
 
 育成レースとウマ娘名鑑の全身表示でも立体表示を確認しています。この2画面での物理6DoFは個別検証待ちです。衣装プレビューは試験対応で、立体表示への切り替えと近距離でのモデルの欠けを再検証中です。
-
-# UmaVR
-
-制作者: [@TBluebox12](https://x.com/TBluebox12)  
-支援: [buymeacoffee.com/vrshits](https://buymeacoffee.com/vrshits)
-
-UmaVRは、DMM版『ウマ娘 プリティーダービー』向けの非公式Meta Quest/OpenXR VR Modです。VRコントローラーでゲームUIを操作できます。
-
-Virtual DesktopのVDXR経路で実機検証済みです。現在の公式バージョンは**v0.1.13**です。
-
-[v0.1.13をダウンロード](https://github.com/deadpixel134/umamusume-vr/releases/tag/v0.1.13) · [インストール・更新・削除](docs/ja/INSTALLATION.md) · [操作ガイド](docs/ja/CONTROLS.md)
 
 ## 1. インストール
 

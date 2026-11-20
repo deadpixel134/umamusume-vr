@@ -1,5 +1,16 @@
 ## [English](README.md) | [한국어](README.ko.md) | [日本語](README.ja.md)
 
+# UmaVR
+
+Creator: [@TBluebox12](https://x.com/TBluebox12)  
+Support: [buymeacoffee.com/vrshits](https://buymeacoffee.com/vrshits)
+
+UmaVR is an unofficial Meta Quest/OpenXR VR mod for the DMM release of Umamusume: Pretty Derby. The game UI can be operated with VR controllers.
+
+The Virtual Desktop VDXR route has been tested on hardware. The current official version is **v0.1.13**.
+
+[Download v0.1.13](https://github.com/deadpixel134/umamusume-vr/releases/tag/v0.1.13) · [Install, update or remove](docs/en/INSTALLATION.md) · [Controller guide](docs/en/CONTROLS.md)
+
 ## Requirements
 
 Windows 11 x64, the DMM edition of Umamusume, Meta Quest controllers and a working PC OpenXR connection. The tested setup uses Direct3D 11, Virtual Desktop (VDXR) and Localify 1.50.0.
@@ -12,17 +23,6 @@ In [v0.1.13](https://github.com/deadpixel134/umamusume-vr/releases/tag/v0.1.13),
 - Live — supported concert performances, once the stage appears.
 
 Stereo rendering has also been observed during Career races and in the full-body view in Character Notes. Physical 6DoF has yet to be verified separately on those screens. Outfit Preview is experimental and is being retested for stereo entry and close-up clipping.
-
-# UmaVR
-
-Creator: [@TBluebox12](https://x.com/TBluebox12)  
-Support: [buymeacoffee.com/vrshits](https://buymeacoffee.com/vrshits)
-
-UmaVR is an unofficial Meta Quest/OpenXR VR mod for the DMM release of Umamusume: Pretty Derby. The game UI can be operated with VR controllers.
-
-The Virtual Desktop VDXR route has been tested on hardware. The current official version is **v0.1.13**.
-
-[Download v0.1.13](https://github.com/deadpixel134/umamusume-vr/releases/tag/v0.1.13) · [Install, update or remove](docs/en/INSTALLATION.md) · [Controller guide](docs/en/CONTROLS.md)
 
 ## 1. Install
 
